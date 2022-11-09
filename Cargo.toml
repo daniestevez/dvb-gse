@@ -1,0 +1,33 @@
+[package]
+name = "dvb-gse"
+version = "0.1.0"
+edition = "2021"
+authors = ["Daniel Estevez <daniel@destevez.net>"]
+description = "DVB-GSE (Digital Video Brodcast Generic Stream Encapsulation)"
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/daniestevez/dvg-gse/"
+repository = "https://github.com/daniestevez/dvg-gse/"
+keywords = ["dvb", "dvb-s2", "gse", "satellite", "network"]
+categories = ["aerospace::space-protocols", "command-line-utilities",
+              "multimedia", "network-programming", ]
+exclude = ["/.github"]
+
+[features]
+default = ["cli"]
+# Enables the CLI application.
+cli = ["anyhow", "clap", "env_logger", "tun-tap"]
+
+[dependencies]
+anyhow = { version = "1", features = ["std"], optional = true }
+bitvec = "1"
+bytes = "1.2"
+clap = { version = "4.0", features = ["derive"], optional = true }
+crc = "3.0"
+env_logger = { version = "0.9", optional = true }
+lazy_static = "1.4"
+log = "0.4"
+num_enum = "0.5"
+tun-tap = { version = "0.1", default-features = false, optional = true }
+
+[dev-dependencies]
+hex-literal = "0.3"
