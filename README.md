@@ -21,7 +21,7 @@ DVB-S2/DVB-S2X BBFRAMES.
 ## Documentation
 
 The documentation for dvb-gse is hosted in
-[docs.rs](https://docs.rs/dvg-gse/).
+[docs.rs](https://docs.rs/dvb-gse/).
 
 ## License
 
