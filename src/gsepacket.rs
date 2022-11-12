@@ -65,7 +65,7 @@ impl GSEPacket {
                 }
                 Some(packet)
             } else {
-                log::debug!("no more GSE Packet in BBFRAME");
+                log::debug!("no more GSE Packets in BBFRAME");
                 None
             }
         })
