@@ -88,9 +88,12 @@ impl<R: RecvFragment> BBFrameDefrag<R> {
     /// has been reassembled. On success, the BBFRAME is returned.
     pub fn get_bbframe(&mut self) -> Result<BBFrame> {
         loop {
-            // Get first UDP packet, which should contain the header
             self.occupied_bytes = 0;
-            self.recv()?;
+            // Get UDP packets until we have a full BBHEADER (typically a single
+            // packet will suffice).
+            while self.occupied_bytes < BBHeader::LEN {
+                self.recv()?;
+            }
             if !self.bbheader_is_valid() {
                 continue;
             }
@@ -120,9 +123,6 @@ impl<R: RecvFragment> BBFrameDefrag<R> {
     }
 
     fn bbheader_is_valid(&self) -> bool {
-        if self.occupied_bytes < BBHeader::LEN {
-            return false;
-        }
         let header = self.bbheader();
         if !header.crc_is_valid() {
             return false;
