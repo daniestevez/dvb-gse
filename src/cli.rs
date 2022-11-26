@@ -21,6 +21,9 @@ struct Args {
     /// TUN interface name
     #[arg(long)]
     tun: String,
+    /// ISI to process in MIS mode (if this option is not specified, run in SIS mode)
+    #[arg(long)]
+    isi: Option<u8>,
 }
 
 fn try_join_multicast(socket: &UdpSocket, addr: &SocketAddr) -> Result<()> {
@@ -47,6 +50,7 @@ pub fn main() -> Result<()> {
     let socket = UdpSocket::bind(args.listen).context("failed to bind to UDP socket")?;
     try_join_multicast(&socket, &args.listen)?;
     let mut bbframe_defrag = BBFrameDefrag::new(socket);
+    bbframe_defrag.set_isi(args.isi);
     let mut gsepacket_defrag = GSEPacketDefrag::new();
     loop {
         let bbframe = bbframe_defrag
