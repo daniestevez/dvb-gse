@@ -25,6 +25,7 @@ pub struct BBFrameDefrag<R> {
     recv_fragment: R,
     buffer: Box<[u8]>,
     occupied_bytes: usize,
+    isi: Option<u8>,
 }
 
 /// BBFRAME (Base-Band Frame).
@@ -76,7 +77,20 @@ impl<R> BBFrameDefrag<R> {
             recv_fragment,
             buffer,
             occupied_bytes: 0,
+            isi: None,
         }
+    }
+
+    /// Set the ISI (Input Stream Indicator) to process.
+    ///
+    /// When this function is called with `Some(n)`, the defragmenter will
+    /// expect an MIS (Multiple Input Stream) signal and will only process the
+    /// indicated ISI. When this function is called with `None`, the
+    /// defragmenter will expect a SIS (Single Input Stream) signal.
+    ///
+    /// The default after the construction of [`BBFrameDefrag`] is SIS mode.
+    pub fn set_isi(&mut self, isi: Option<u8>) {
+        self.isi = isi;
     }
 }
 
@@ -135,9 +149,23 @@ impl<R: RecvFragment> BBFrameDefrag<R> {
             );
             return false;
         }
-        if !matches!(header.sismis(), SisMis::Sis) {
-            log::error!("MIS (multiple input stream) unsupported");
-            return false;
+        match self.isi {
+            None => {
+                if !matches!(header.sismis(), SisMis::Sis) {
+                    log::error!("MIS (multiple input stream) BBFRAME unsupported in SIS mode");
+                    return false;
+                }
+            }
+            Some(isi) => {
+                if !matches!(header.sismis(), SisMis::Mis) {
+                    log::error!("SIS (single input stream) BBFRAME unsupported in MIS mode");
+                    return false;
+                }
+                if header.isi() != isi {
+                    log::debug!("dropping BBFRAME with ISI = {}", header.isi());
+                    return false;
+                }
+            }
         }
         if header.issyi() {
             log::error!("ISSYI unsupported");
