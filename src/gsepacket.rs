@@ -103,6 +103,7 @@ impl GSEPacket {
 #[derive(Debug)]
 pub struct GSEPacketDefrag {
     defrags: HashMap<u8, Defrag>,
+    skip_total_length_check: bool,
 }
 
 #[derive(Clone)]
@@ -113,6 +114,9 @@ struct Defrag {
     current_length: usize,
     fragments: Vec<Bytes>,
     digest: Digest<'static, u32>,
+    // Used because some modulators do not set the Total Length field
+    // correctly. See https://github.com/daniestevez/dvb-gse/issues/11
+    skip_total_length_check: bool,
 }
 
 /// PDU.
@@ -156,7 +160,20 @@ impl GSEPacketDefrag {
     pub fn new() -> GSEPacketDefrag {
         GSEPacketDefrag {
             defrags: HashMap::new(),
+            skip_total_length_check: false,
         }
+    }
+
+    /// Enables or disables the check of the total length field.
+    ///
+    /// By default, `GSEPacketDefrag` checks that the length of the defragmented
+    /// data matches the value specified in the total length check
+    /// field. However,
+    /// [some modulators set this value incorrectly](https://github.com/daniestevez/dvb-gse/issues/11).
+    /// This function can be used to skip the check of the total length
+    /// field.
+    pub fn set_skip_total_length_check(&mut self, value: bool) {
+        self.skip_total_length_check = value;
     }
 
     /// Defragment a BBFRAME.
@@ -176,6 +193,7 @@ impl GSEPacketDefrag {
         if packet.header().start() {
             log::debug!("start of GSE fragment ID = {}", frag_id);
             let mut defrag = Defrag::new(packet.header()).unwrap();
+            defrag.set_skip_total_length_check(self.skip_total_length_check);
             defrag.push(packet);
             self.defrags.insert(frag_id, defrag);
         } else if let Some(defrag) = self.defrags.get_mut(&frag_id) {
@@ -201,7 +219,12 @@ impl Defrag {
             current_length: 0,
             fragments: Vec::new(),
             digest: CRC32.digest(),
+            skip_total_length_check: false,
         })
+    }
+
+    fn set_skip_total_length_check(&mut self, value: bool) {
+        self.skip_total_length_check = value;
     }
 
     fn push(&mut self, packet: &GSEPacket) {
@@ -238,7 +261,7 @@ impl Defrag {
     }
 
     fn reconstruct(self, frag_id: u8) -> Option<PDU> {
-        if self.total_length != self.current_length {
+        if !self.skip_total_length_check && self.total_length != self.current_length {
             log::debug!(
                 "defragmented length {} does not match total length {}",
                 self.current_length,
