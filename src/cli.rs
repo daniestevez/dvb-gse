@@ -24,6 +24,9 @@ struct Args {
     /// ISI to process in MIS mode (if this option is not specified, run in SIS mode)
     #[arg(long)]
     isi: Option<u8>,
+    /// Skip checking the GSE total length field
+    #[arg(long)]
+    skip_total_length: bool,
 }
 
 fn try_join_multicast(socket: &UdpSocket, addr: &SocketAddr) -> Result<()> {
@@ -52,6 +55,7 @@ pub fn main() -> Result<()> {
     let mut bbframe_defrag = BBFrameDefrag::new(socket);
     bbframe_defrag.set_isi(args.isi);
     let mut gsepacket_defrag = GSEPacketDefrag::new();
+    gsepacket_defrag.set_skip_total_length_check(args.skip_total_length);
     loop {
         let bbframe = bbframe_defrag
             .get_bbframe()
