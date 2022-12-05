@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2022-12-05
+
+### Added
+
+- Support for skipping GSE total length check
+
 ## [0.2.0] - 2022-11-28
 
 ### Added
