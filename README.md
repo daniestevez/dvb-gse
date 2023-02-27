@@ -6,7 +6,7 @@
 [crates-badge]: https://img.shields.io/crates/v/dvb-gse.svg
 [crates-url]: https://crates.io/crates/dvb-gse
 
-dvg-se is a Rust implementation of the DVB GSE (Generic Stream Encapsulation)
+dvg-gse is a Rust implementation of the DVB GSE (Generic Stream Encapsulation)
 protocol and related protocols.
 
 It is mainly intended to be used as a CLI application that receives UDP
