@@ -9,7 +9,10 @@
 use crate::{bbframe::BBFrameDefrag, gsepacket::GSEPacketDefrag};
 use anyhow::{Context, Result};
 use clap::Parser;
-use std::net::{SocketAddr, UdpSocket};
+use std::{
+    net::{SocketAddr, UdpSocket},
+    os::unix::io::AsRawFd,
+};
 
 /// Receive DVB-GSE and send PDUs into a TUN device
 #[derive(Parser, Debug)]
@@ -29,17 +32,37 @@ struct Args {
     skip_total_length: bool,
 }
 
-fn try_join_multicast(socket: &UdpSocket, addr: &SocketAddr) -> Result<()> {
+fn setup_multicast(socket: &UdpSocket, addr: &SocketAddr) -> Result<()> {
     match addr.ip() {
         std::net::IpAddr::V4(addr) if addr.is_multicast() => {
+            set_reuseaddr(socket)?;
             log::info!("joining multicast address {}", addr);
             socket.join_multicast_v4(&addr, &std::net::Ipv4Addr::UNSPECIFIED)?;
         }
         std::net::IpAddr::V6(addr) if addr.is_multicast() => {
+            set_reuseaddr(socket)?;
             log::info!("joining multicast address {}", addr);
             socket.join_multicast_v6(&addr, 0)?;
         }
         _ => (),
+    }
+    Ok(())
+}
+
+fn set_reuseaddr(socket: &UdpSocket) -> Result<()> {
+    let optval: libc::c_int = 1;
+    if unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_REUSEADDR,
+            &optval as *const _ as *const libc::c_void,
+            libc::socklen_t::try_from(std::mem::size_of::<libc::c_int>()).unwrap(),
+        )
+    } != 0
+    {
+        let err = std::io::Error::last_os_error();
+        anyhow::bail!("could not set SO_REUSEADDR: {err}")
     }
     Ok(())
 }
@@ -51,7 +74,7 @@ pub fn main() -> Result<()> {
     let tap = tun_tap::Iface::without_packet_info(&args.tun, tun_tap::Mode::Tun)
         .context("failed to open TUN device")?;
     let socket = UdpSocket::bind(args.listen).context("failed to bind to UDP socket")?;
-    try_join_multicast(&socket, &args.listen)?;
+    setup_multicast(&socket, &args.listen)?;
     let mut bbframe_defrag = BBFrameDefrag::new(socket);
     bbframe_defrag.set_isi(args.isi);
     let mut gsepacket_defrag = GSEPacketDefrag::new();
