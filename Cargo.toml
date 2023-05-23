@@ -27,8 +27,8 @@ env_logger = { version = "0.10", optional = true }
 lazy_static = "1.4"
 libc = { version = "0.2", optional = true }
 log = "0.4"
-num_enum = "0.5"
+num_enum = "0.6"
 tun-tap = { version = "0.1", default-features = false, optional = true }
 
 [dev-dependencies]
-hex-literal = "0.3"
+hex-literal = "0.4"
