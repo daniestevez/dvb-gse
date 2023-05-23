@@ -11,9 +11,9 @@ use bytes::Bytes;
 use std::io::Result;
 use std::net::UdpSocket;
 
-// The maximum BBFRAME size possible corresponds to r=154/180 DVB-S2X with
-// normal FECFRAMEs, which is 55248 bits or 6906 bytes.
-const BBFRAME_MAX_LEN: usize = 6906;
+// The maximum BBFRAME size possible corresponds to r=9/10 DVB-S2 with
+// normal FECFRAMEs, which is 58192 bits or 7274 bytes.
+const BBFRAME_MAX_LEN: usize = 7274;
 
 /// BBFRAME defragmenter.
 ///
