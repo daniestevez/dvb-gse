@@ -27,8 +27,8 @@ struct Args {
     /// TUN interface name
     #[arg(long)]
     tun: String,
-    /// Input format: "UDP fragments" (default), "UDP complete", or "TCP"
-    #[arg(long)]
+    /// Input format: "UDP fragments", "UDP complete", or "TCP"
+    #[arg(long, default_value_t)]
     input: InputFormat,
     /// ISI to process in MIS mode (if this option is not specified, run in SIS mode)
     #[arg(long)]
