@@ -69,7 +69,7 @@ followed.
   
 The CLI application tries to recover from dropped UDP packets.
 
-### UDP packets with complete BBFRAMES (`--input "UDP complete")
+### UDP packets with complete BBFRAMES (`--input "UDP complete"`)
 
 This corresponds to BBFRAMEs carried in a single UDP packet (it will typically
 be a jumbo packet). The following rules need to be followed.
