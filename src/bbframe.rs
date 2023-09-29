@@ -8,45 +8,96 @@
 
 use super::bbheader::{BBHeader, SisMis, TsGs};
 use bytes::Bytes;
-use std::io::Result;
+use std::io::{Read, Result};
 use std::net::UdpSocket;
 
-// The maximum BBFRAME size possible corresponds to r=9/10 DVB-S2 with
-// normal FECFRAMEs, which is 58192 bits or 7274 bytes.
-const BBFRAME_MAX_LEN: usize = 7274;
+/// Maximum BBFRAME length in bytes.
+///
+/// The maximum BBFRAME size possible corresponds to r=9/10 DVB-S2 with normal
+/// FECFRAMEs, which is 58192 bits or 7274 bytes.
+pub const BBFRAME_MAX_LEN: usize = 7274;
 
 /// BBFRAME defragmenter.
 ///
-/// This receivers BBFRAME fragments from an object that implements the
-/// [`RecvFragment`] trait and performs defragmentation to obtain and return
-/// full BBFRAMES.
+/// This receives BBFRAME fragments from an object that implements the
+/// [`RecvFragment`] trait and performs defragmentation and validation to obtain
+/// and return full BBFRAMES.
 #[derive(Debug)]
 pub struct BBFrameDefrag<R> {
     recv_fragment: R,
-    buffer: Box<[u8]>,
+    buffer: Box<[u8; BBFRAME_MAX_LEN]>,
     occupied_bytes: usize,
+    validator: Validator,
+}
+
+/// BBFRAME receiver.
+///
+/// This receives complete BBFRAMEs from an object that implements the
+/// [`RecvBBFrame`] trait and performs validation to return full BBFRAMES.
+#[derive(Debug)]
+pub struct BBFrameRecv<R> {
+    recv_bbframe: R,
+    buffer: Box<[u8; BBFRAME_MAX_LEN]>,
+    validator: Validator,
+}
+
+/// BBFRAME stream receiver.
+///
+/// This receives BBFRAMEs from a stream object that implements the
+/// [`RecvStream`] trait and performs validation to return full BBFRAMES.
+#[derive(Debug)]
+pub struct BBFrameStream<R> {
+    recv_stream: R,
+    buffer: Box<[u8; BBFRAME_MAX_LEN]>,
+    validator: Validator,
+}
+
+/// Receiver of BBFrames.
+///
+/// This trait generalizes reception of BBFRAMEs and provides a method to
+/// receive validated BBFRAMEs one by one.
+pub trait BBFrameReceiver {
+    /// Get and return a new validated BBFRAME.
+    fn get_bbframe(&mut self) -> Result<BBFrame>;
+}
+
+#[derive(Debug, Default)]
+struct Validator {
     isi: Option<u8>,
+}
+
+impl Validator {
+    fn new() -> Validator {
+        Validator::default()
+    }
+
+    fn set_isi(&mut self, isi: Option<u8>) {
+        self.isi = isi;
+    }
 }
 
 /// BBFRAME (Base-Band Frame).
 ///
 /// This is an alias for [`Bytes`]. BBFRAMES are represented by the `Bytes` that
-/// contains its data.
+/// contains their data.
 pub type BBFrame = Bytes;
 
-/// The `RecvFragment` trait allows receiving BBFRAME fragments.
+/// Receiver of BBFRAME fragments.
 ///
-/// This trait is modeled around [`UdpSocket::recv_from`], since the main method
-/// to receive BBFRAME fragments is as datagrams received from a UDP socket.
+/// This trait is modeled around [`UdpSocket::recv_from`], since the main way to
+/// receive BBFRAME fragments is as datagrams received from a UDP socket.
 ///
 /// The BBFRAME fragments are required to be such that the start of each BBFRAME
-/// is always at the start of a fragment.
+/// is always at the start of a fragment. The BBFRAMEs may or may not have
+/// padding at the end. The `recv_fragment` function is allowed to skip
+/// suppyling some fragments, which happens for instance if UDP packets are lost
+/// (when this trait is implemented by a UDP socket).
 pub trait RecvFragment {
     /// Receives a single fragment into the buffer. On success, returns the
     /// number of bytes read.
     ///
-    /// The function must be called with valid byte array `buf` of sufficient
-    /// size to hold the message bytes. If a message is too long to fit in the
+    /// The function must be called with a valid byte slice `buf` of sufficient
+    /// size to hold the fragment. If a fragment is too long to fit in the
     /// supplied buffer, excess bytes may be discarded.
     fn recv_fragment(&mut self, buf: &mut [u8]) -> Result<usize>;
 }
@@ -66,41 +117,122 @@ where
     }
 }
 
+/// Receiver of complete BBFRAMEs.
+///
+/// This trait is modeled around [`UdpSocket::recv_from`], since the main way to
+/// receive complete BBFRAMEs is as jumbo datagrams received from a UDP socket.
+///
+/// The BBFRAMEs may or may not have padding at the end. The `recv_fragment`
+/// function is allowed to skip suppyling some complete BBFRAMEs, which happens
+/// for instance if UDP packets are lost (when this trait is implemented by a
+/// UDP socket).
+pub trait RecvBBFrame {
+    /// Receives a single fragment into the buffer. On success, returns the
+    /// number of bytes read.
+    ///
+    /// The function is called with a byte array `buf` of sufficient
+    /// size to hold the message bytes.
+    fn recv_bbframe(&mut self, buf: &mut [u8; BBFRAME_MAX_LEN]) -> Result<usize>;
+}
+
+impl RecvBBFrame for UdpSocket {
+    fn recv_bbframe(&mut self, buf: &mut [u8; BBFRAME_MAX_LEN]) -> Result<usize> {
+        self.recv_from(&mut buf[..]).map(|x| x.0)
+    }
+}
+
+impl<F> RecvBBFrame for F
+where
+    F: FnMut(&mut [u8; BBFRAME_MAX_LEN]) -> Result<usize>,
+{
+    fn recv_bbframe(&mut self, buf: &mut [u8; BBFRAME_MAX_LEN]) -> Result<usize> {
+        self(buf)
+    }
+}
+
+/// Receiver of a stream of BBFRAMEs.
+///
+/// This trait is modeled around [`TcpStream::read_exact`], since it is the main
+/// way to receive a stream of BBFRAMEs.
+///
+/// The BBFRAMEs cannot have padding at the end (the length of the BBFRAME must
+/// be equal to the DFL plus the BBHEADER). They need to be present back-to-back
+/// in the stream.  The stream is allowed to skip supplying some complete
+/// BBFRAMEs (this may happened with a TCP stream if BBFRAMEs overflow a buffer
+/// before being written to the TCP socket).
+pub trait RecvStream {
+    /// Reads the exact number of bytes required to fill `buf`.
+    fn recv_stream(&mut self, buf: &mut [u8]) -> Result<()>;
+}
+
+impl<R: Read> RecvStream for R {
+    fn recv_stream(&mut self, buf: &mut [u8]) -> Result<()> {
+        self.read_exact(buf)
+    }
+}
+
+trait BBFrameRecvCommon {
+    fn buffer(&self) -> &[u8; BBFRAME_MAX_LEN];
+
+    fn bbheader(&self) -> BBHeader {
+        BBHeader::new(self.buffer()[..BBHeader::LEN].try_into().unwrap())
+    }
+}
+
+macro_rules! impl_recv_common {
+    ($($id:ident),*) => {
+        $(
+            impl<R> BBFrameRecvCommon for $id<R> {
+                fn buffer(&self) -> &[u8; BBFRAME_MAX_LEN] {
+                    &self.buffer
+                }
+            }
+        )*
+    }
+}
+
+impl_recv_common!(BBFrameDefrag, BBFrameRecv, BBFrameStream);
+
+macro_rules! impl_set_isi {
+    ($t:ident) => {
+        /// Set the ISI (Input Stream Indicator) to process.
+        ///
+        /// When this function is called with `Some(n)`, the defragmenter will
+        /// expect an MIS (Multiple Input Stream) signal and will only process the
+        /// indicated ISI. When this function is called with `None`, the
+        /// defragmenter will expect a SIS (Single Input Stream) signal.
+        ///
+        /// The default after the construction of [`$t`] is SIS mode.
+        pub fn set_isi(&mut self, isi: Option<u8>) {
+            self.validator.set_isi(isi);
+        }
+    };
+}
+
 impl<R> BBFrameDefrag<R> {
     /// Creates a new BBFRAME defragmenter.
     ///
     /// The `recv_fragment` object is intended to be an implementor of
     /// [`RecvFragment`] that will be used to receive BBFRAME fragments.
     pub fn new(recv_fragment: R) -> BBFrameDefrag<R> {
-        let buffer = vec![0; BBFRAME_MAX_LEN].into_boxed_slice();
         BBFrameDefrag {
             recv_fragment,
-            buffer,
+            buffer: Box::new([0; BBFRAME_MAX_LEN]),
             occupied_bytes: 0,
-            isi: None,
+            validator: Validator::new(),
         }
     }
 
-    /// Set the ISI (Input Stream Indicator) to process.
-    ///
-    /// When this function is called with `Some(n)`, the defragmenter will
-    /// expect an MIS (Multiple Input Stream) signal and will only process the
-    /// indicated ISI. When this function is called with `None`, the
-    /// defragmenter will expect a SIS (Single Input Stream) signal.
-    ///
-    /// The default after the construction of [`BBFrameDefrag`] is SIS mode.
-    pub fn set_isi(&mut self, isi: Option<u8>) {
-        self.isi = isi;
-    }
+    impl_set_isi!(BBFrameDefrag);
 }
 
-impl<R: RecvFragment> BBFrameDefrag<R> {
-    /// Get and return a new BBFRAME.
+impl<R: RecvFragment> BBFrameReceiver for BBFrameDefrag<R> {
+    /// Get and return a new validated BBFRAME.
     ///
     /// This function calls the [`RecvFragment::recv_fragment`] method of the
-    /// `RecvFragment` object owned by the defragmented until a complete BBFRAME
+    /// `RecvFragment` object owned by the defragmenter until a complete BBFRAME
     /// has been reassembled. On success, the BBFRAME is returned.
-    pub fn get_bbframe(&mut self) -> Result<BBFrame> {
+    fn get_bbframe(&mut self) -> Result<BBFrame> {
         loop {
             self.occupied_bytes = 0;
             // Get UDP packets until we have a full BBHEADER (typically a single
@@ -108,22 +240,21 @@ impl<R: RecvFragment> BBFrameDefrag<R> {
             while self.occupied_bytes < BBHeader::LEN {
                 self.recv()?;
             }
-            if !self.bbheader_is_valid() {
+            if !self.validator.bbheader_is_valid(self.bbheader()) {
                 continue;
             }
             let bbframe_len = usize::from(self.bbheader().dfl() / 8) + BBHeader::LEN;
             while self.occupied_bytes < bbframe_len {
                 self.recv()?;
             }
-            if self.occupied_bytes > bbframe_len {
-                log::warn!("received unexpected extra data at the end of BBFRAME data field");
-            }
             let bbframe = Bytes::copy_from_slice(&self.buffer[..bbframe_len]);
             log::trace!("completed BBFRAME {:?}", bbframe);
             return Ok(bbframe);
         }
     }
+}
 
+impl<R: RecvFragment> BBFrameDefrag<R> {
     fn recv(&mut self) -> Result<()> {
         let n = self
             .recv_fragment
@@ -131,48 +262,154 @@ impl<R: RecvFragment> BBFrameDefrag<R> {
         self.occupied_bytes += n;
         Ok(())
     }
+}
 
-    fn bbheader(&self) -> BBHeader {
-        BBHeader::new(self.buffer[..BBHeader::LEN].try_into().unwrap())
+impl<R> BBFrameRecv<R> {
+    /// Creates a new BBFRAME receiver.
+    ///
+    /// The `recv_bbframe` object is intended to be an implementor of
+    /// [`RecvBBFrame`] that will be used to receive complete BBFRAMEs.
+    pub fn new(recv_bbframe: R) -> BBFrameRecv<R> {
+        BBFrameRecv {
+            recv_bbframe,
+            buffer: Box::new([0; BBFRAME_MAX_LEN]),
+            validator: Validator::new(),
+        }
     }
 
-    fn bbheader_is_valid(&self) -> bool {
-        let header = self.bbheader();
-        if !header.crc_is_valid() {
+    impl_set_isi!(BBFrameRecv);
+}
+
+impl<R: RecvBBFrame> BBFrameReceiver for BBFrameRecv<R> {
+    /// Get and return a new validated BBFRAME.
+    ///
+    /// This function calls the [`RecvBBFrame::recv_bbframe] method of the
+    /// `RecvBBFrame` object owned by the receiver and validates the received
+    /// BBFRAME, returning an error if the BBFRAME is not valid or if there is
+    /// an error in reception.
+    fn get_bbframe(&mut self) -> Result<BBFrame> {
+        let recv_len = self.recv_bbframe.recv_bbframe(&mut self.buffer)?;
+        if recv_len < BBHeader::LEN {
+            log::error!("received BBFRAME is too short (length {recv_len})");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "BBFRAME is too short",
+            ));
+        }
+        if !self.validator.bbheader_is_valid(self.bbheader()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid BBFRAME received",
+            ));
+        }
+        let bbframe_len = usize::from(self.bbheader().dfl() / 8) + BBHeader::LEN;
+        if recv_len < bbframe_len {
+            log::error!(
+                "received BBFRAME has length {recv_len}, \
+                         but according to DFL it should have length {bbframe_len}"
+            );
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "BBFRAME is too short",
+            ));
+        }
+        let bbframe = Bytes::copy_from_slice(&self.buffer[..bbframe_len]);
+        log::trace!("completed BBFRAME {:?}", bbframe);
+        Ok(bbframe)
+    }
+}
+
+impl<R> BBFrameStream<R> {
+    /// Creates a new BBFRAME stream receiver.
+    ///
+    /// The `recv_stream` object is intended to be an implementor of
+    /// [`RecvStream`] that will be used to receive BBFRAMEs from a stream.
+    pub fn new(recv_stream: R) -> BBFrameStream<R> {
+        BBFrameStream {
+            recv_stream,
+            buffer: Box::new([0; BBFRAME_MAX_LEN]),
+            validator: Validator::new(),
+        }
+    }
+
+    impl_set_isi!(BBFrameStream);
+}
+
+impl<R: RecvStream> BBFrameReceiver for BBFrameStream<R> {
+    /// Get and return a new validated BBFRAME.
+    ///
+    /// This function calls the [`RecvStream::recv_stream] method of the
+    /// `RecvStream` object owned by the receiver and validates the received
+    /// BBFRAME, returning an error if the BBFRAME is not valid or if there is
+    /// an error in reception.
+    fn get_bbframe(&mut self) -> Result<BBFrame> {
+        // read full BBHEADER
+        self.recv_stream
+            .recv_stream(&mut self.buffer[..BBHeader::LEN])?;
+        if !self.validator.bbheader_is_valid(self.bbheader()) {
+            // BBHeader is invalid, but we try to honor its DFL and read the
+            // data field to recover from the error, unless the DFL is too large
+            let bbframe_len = usize::from(self.bbheader().dfl() / 8) + BBHeader::LEN;
+            if bbframe_len <= BBFRAME_MAX_LEN {
+                self.recv_stream
+                    .recv_stream(&mut self.buffer[BBHeader::LEN..bbframe_len])?;
+            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid BBHEADER received",
+            ));
+        }
+        let bbframe_len = usize::from(self.bbheader().dfl() / 8) + BBHeader::LEN;
+        // read data field
+        self.recv_stream
+            .recv_stream(&mut self.buffer[BBHeader::LEN..bbframe_len])?;
+        let bbframe = Bytes::copy_from_slice(&self.buffer[..bbframe_len]);
+        log::trace!("completed BBFRAME {:?}", bbframe);
+        Ok(bbframe)
+    }
+}
+
+impl Validator {
+    fn bbheader_is_valid(&self, bbheader: BBHeader) -> bool {
+        if !bbheader.crc_is_valid() {
             return false;
         }
-        log::trace!("received {} with valid CRC", header);
-        if !matches!(header.tsgs(), TsGs::GenericContinuous) {
+        log::trace!("received {} with valid CRC", bbheader);
+        if !matches!(bbheader.tsgs(), TsGs::GenericContinuous) {
             log::error!(
                 "unsupported TS/GS type '{}' (only 'Generic continous' is supported)",
-                header.tsgs()
+                bbheader.tsgs()
             );
             return false;
         }
         match self.isi {
             None => {
-                if !matches!(header.sismis(), SisMis::Sis) {
+                if !matches!(bbheader.sismis(), SisMis::Sis) {
                     log::error!("MIS (multiple input stream) BBFRAME unsupported in SIS mode");
                     return false;
                 }
             }
             Some(isi) => {
-                if !matches!(header.sismis(), SisMis::Mis) {
+                if !matches!(bbheader.sismis(), SisMis::Mis) {
                     log::error!("SIS (single input stream) BBFRAME unsupported in MIS mode");
                     return false;
                 }
-                if header.isi() != isi {
-                    log::debug!("dropping BBFRAME with ISI = {}", header.isi());
+                if bbheader.isi() != isi {
+                    log::debug!("dropping BBFRAME with ISI = {}", bbheader.isi());
                     return false;
                 }
             }
         }
-        if header.issyi() {
+        if bbheader.issyi() {
             log::error!("ISSYI unsupported");
             return false;
         }
-        if header.dfl() % 8 != 0 {
+        if bbheader.dfl() % 8 != 0 {
             log::error!("unsupported data field length not a multiple of 8 bits");
+            return false;
+        }
+        if usize::from(bbheader.dfl() / 8) > BBFRAME_MAX_LEN - BBHeader::LEN {
+            log::error!("DFL value {} too large", bbheader.dfl());
             return false;
         }
         true
@@ -285,7 +522,7 @@ mod test {
     static MULTIPLE_FRAGMENTS: [&'static [u8]; 3] = [&FRAGMENT0, &FRAGMENT1, &FRAGMENT2];
 
     #[test]
-    fn single_fragment() {
+    fn single_fragment_defrag() {
         let times_called = std::cell::Cell::new(0);
         let mut defrag = BBFrameDefrag::new(|buff: &mut [u8]| {
             times_called.replace(times_called.get() + 1);
@@ -300,7 +537,7 @@ mod test {
     }
 
     #[test]
-    fn multiple_fragments() {
+    fn multiple_fragments_defrag() {
         let times_called = std::cell::Cell::new(0);
         let mut defrag = BBFrameDefrag::new(|buff: &mut [u8]| {
             let fragment = MULTIPLE_FRAGMENTS[times_called.get()];
@@ -314,5 +551,30 @@ mod test {
         }
         assert_eq!(defrag.get_bbframe().unwrap(), expected);
         assert_eq!(times_called.get(), 3);
+    }
+
+    #[test]
+    fn recv_one_bbframe() {
+        let times_called = std::cell::Cell::new(0);
+        let mut defrag = BBFrameRecv::new(|buff: &mut [u8; BBFRAME_MAX_LEN]| {
+            times_called.replace(times_called.get() + 1);
+            buff[..SINGLE_FRAGMENT.len()].copy_from_slice(&SINGLE_FRAGMENT);
+            Ok(SINGLE_FRAGMENT.len())
+        });
+        assert_eq!(
+            defrag.get_bbframe().unwrap(),
+            Bytes::from_static(&SINGLE_FRAGMENT)
+        );
+        assert_eq!(times_called.get(), 1);
+    }
+
+    #[test]
+    fn stream_one_bbframe() {
+        let stream = &SINGLE_FRAGMENT[..];
+        let mut defrag = BBFrameStream::new(stream);
+        assert_eq!(
+            defrag.get_bbframe().unwrap(),
+            Bytes::from_static(&SINGLE_FRAGMENT)
+        );
     }
 }
