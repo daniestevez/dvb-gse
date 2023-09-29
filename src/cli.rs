@@ -1,16 +1,19 @@
 //! CLI application.
 //!
-//! This module implements a CLI applicaton that receives UDP
-//! packets from
-//! [`Longmynd`](https://github.com/BritishAmateurTelevisionClub/longmynd)
-//! containing fragments of BBFRAMES, obtains IP packets from a continous-mode
-//! GSE stream, and sends the IP packets to a TUN device.
+//! This module implements a CLI application that receives UDP or TCP packets
+//! containing BBFRAMEs from an external DVB-S2 receiver such as
+//! [`Longmynd`](https://github.com/BritishAmateurTelevisionClub/longmynd). It
+//! obtains IP packets from a continous-mode GSE stream, and sends the IP
+//! packets to a TUN device.
 
-use crate::{bbframe::BBFrameDefrag, gsepacket::GSEPacketDefrag};
+use crate::{
+    bbframe::{BBFrameDefrag, BBFrameReceiver, BBFrameRecv, BBFrameStream},
+    gsepacket::GSEPacketDefrag,
+};
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::{
-    net::{SocketAddr, UdpSocket},
+    net::{SocketAddr, TcpListener, UdpSocket},
     os::unix::io::AsRawFd,
 };
 
@@ -18,18 +21,59 @@ use std::{
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// IP and UDP port to listen to DVB-GSE packets from Longmynd
+    /// IP address and port to listen on to receive DVB-S2 BBFRAMEs
     #[arg(long)]
     listen: SocketAddr,
     /// TUN interface name
     #[arg(long)]
     tun: String,
+    /// Input format: "UDP fragments" (default), "UDP complete", or "TCP"
+    #[arg(long)]
+    input: InputFormat,
     /// ISI to process in MIS mode (if this option is not specified, run in SIS mode)
     #[arg(long)]
     isi: Option<u8>,
     /// Skip checking the GSE total length field
     #[arg(long)]
     skip_total_length: bool,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Default)]
+enum InputFormat {
+    /// BBFRAME fragments in UDP datagrams.
+    #[default]
+    UdpFragments,
+    /// Complete BBFRAMEs in UDP datagrams.
+    UdpComplete,
+    /// BBFRAMEs in a TCP stream.
+    Tcp,
+}
+
+impl std::str::FromStr for InputFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "UDP" | "UDP fragments" => InputFormat::UdpFragments,
+            "UDP complete" => InputFormat::UdpComplete,
+            "TCP" => InputFormat::Tcp,
+            _ => return Err(format!("invalid input format {s}")),
+        })
+    }
+}
+
+impl std::fmt::Display for InputFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(
+            f,
+            "{}",
+            match self {
+                InputFormat::UdpFragments => "UDP fragments",
+                InputFormat::UdpComplete => "UDP complete",
+                InputFormat::Tcp => "TCP",
+            }
+        )
+    }
 }
 
 fn setup_multicast(socket: &UdpSocket, addr: &SocketAddr) -> Result<()> {
@@ -67,25 +111,99 @@ fn set_reuseaddr(socket: &UdpSocket) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+struct AppLoop<D> {
+    bbframe_recv: Option<D>,
+    gsepacket_defrag: GSEPacketDefrag,
+    tun: tun_tap::Iface,
+    bbframe_recv_errors_fatal: bool,
+}
+
+impl<D: BBFrameReceiver> AppLoop<D> {
+    fn app_loop(&mut self) -> Result<()> {
+        loop {
+            let bbframe = match self.bbframe_recv.as_mut().unwrap().get_bbframe() {
+                Ok(b) => b,
+                Err(err) => {
+                    if self.bbframe_recv_errors_fatal {
+                        return Err(err).context("failed to receive BBFRAME");
+                    } else {
+                        continue;
+                    }
+                }
+            };
+            for pdu in self.gsepacket_defrag.defragment(&bbframe) {
+                self.tun
+                    .send(pdu.data())
+                    .context("failed to send PDU to TUN device")?;
+            }
+        }
+    }
+}
+
 /// Main function of the CLI application.
 pub fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
-    let tap = tun_tap::Iface::without_packet_info(&args.tun, tun_tap::Mode::Tun)
+    let tun = tun_tap::Iface::without_packet_info(&args.tun, tun_tap::Mode::Tun)
         .context("failed to open TUN device")?;
-    let socket = UdpSocket::bind(args.listen).context("failed to bind to UDP socket")?;
-    setup_multicast(&socket, &args.listen)?;
-    let mut bbframe_defrag = BBFrameDefrag::new(socket);
-    bbframe_defrag.set_isi(args.isi);
     let mut gsepacket_defrag = GSEPacketDefrag::new();
     gsepacket_defrag.set_skip_total_length_check(args.skip_total_length);
-    loop {
-        let bbframe = bbframe_defrag
-            .get_bbframe()
-            .context("failed to receive BBFRAME")?;
-        for pdu in gsepacket_defrag.defragment(&bbframe) {
-            tap.send(pdu.data())
-                .context("failed to send PDU to TUN device")?;
+    match args.input {
+        InputFormat::UdpFragments | InputFormat::UdpComplete => {
+            let socket = UdpSocket::bind(args.listen).context("failed to bind to UDP socket")?;
+            setup_multicast(&socket, &args.listen)?;
+            match args.input {
+                InputFormat::UdpFragments => {
+                    let mut app = AppLoop {
+                        bbframe_recv: Some(BBFrameDefrag::new(socket)),
+                        gsepacket_defrag,
+                        tun,
+                        bbframe_recv_errors_fatal: true,
+                    };
+                    app.app_loop()?;
+                }
+                InputFormat::UdpComplete => {
+                    let mut app = AppLoop {
+                        bbframe_recv: Some(BBFrameRecv::new(socket)),
+                        gsepacket_defrag,
+                        tun,
+                        bbframe_recv_errors_fatal: false,
+                    };
+                    app.app_loop()?;
+                }
+                _ => unreachable!(),
+            }
+        }
+        InputFormat::Tcp => {
+            let listener =
+                TcpListener::bind(args.listen).context("failed to bind to TCP socket")?;
+            let mut app = AppLoop {
+                bbframe_recv: None,
+                gsepacket_defrag,
+                tun,
+                bbframe_recv_errors_fatal: true,
+            };
+            for stream in listener.incoming() {
+                let stream = match stream {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::error!("connection error {e}");
+                        continue;
+                    }
+                };
+                match stream.peer_addr() {
+                    Ok(addr) => log::info!("TCP client connected from {addr}"),
+                    Err(err) => log::error!(
+                        "TCP client connected (but could not retrieve peer address): {err}"
+                    ),
+                }
+                app.bbframe_recv = Some(BBFrameStream::new(stream));
+                if let Err(err) = app.app_loop() {
+                    log::error!("error; waiting for another client: {err}");
+                }
+            }
         }
     }
+    Ok(())
 }

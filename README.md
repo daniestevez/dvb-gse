@@ -9,11 +9,11 @@
 dvg-gse is a Rust implementation of the DVB GSE (Generic Stream Encapsulation)
 protocol and related protocols.
 
-It is mainly intended to be used as a CLI application that receives UDP
-packets from
-[Longmynd](https://github.com/BritishAmateurTelevisionClub/longmynd)
-containing fragments of BBFRAMES, obtains IP packets from a continous-mode
-GSE stream, and sends the IP packets to a TUN device.
+It is mainly intended to be used as a CLI application that receives BBFRAMEs by
+UDP or TCP packets from a DVB-S2 receiver (such as
+[Longmynd](https://github.com/BritishAmateurTelevisionClub/longmynd)), obtains
+IP packets from a continous-mode GSE stream, and sends the IP packets to a TUN
+device.
 
 The crate can also be used as a library to process GSE Packets and
 DVB-S2/DVB-S2X BBFRAMES.
@@ -47,24 +47,55 @@ receiver being used). `dvb-gse` will obtain the IP packets from the GSE stream
 and write them into the `tun0` interface. These packets can be inspected by
 running Wireshark or `tcpdump` in `tun0`.
 
-## BBFRAME format in UDP packets
+## Input formats
 
-The formatting of BBFRAMEs in the UDP packets received by `dvb-gse` needs to
-follow these rules:
+The CLI application supports the following input formats for the BBFRAMEs. The
+input format is selected with the `--input` argument:
+
+### UDP fragments (`--input UDP` or `--input "UDP fragments"`)
+
+This corresponds to BBFRAMEs fragmented into multiple UDP packets (since usually
+DVB-S2 BBFRAMEs are larger than a 1500 byte MTU). The following rules need to be
+followed.
 
 * The beginning of each BBFRAME should be aligned with the beginning of the
   payload of a UDP packet.
 
-* The BBFRAME padding should have been removed (in other words, the data sent
-  for each BBFRAME should equal the 10 byte BBHEADER plus the data field, whose
-  length in bits is given by the value of the DFL field in the BBHEADER).
+* The BBFRAME padding can either be removed or be present. If possible, it is
+  recommended to remove the BBFRAME padding, in order to reduce the network
+  traffic and to simplify the operation of the defragmenter.
 
-* BBFRAMEs can be fragmented into multiple UDP packets in any way. For most
-  FECFRAME configurations it is necessary to use fragmentation unless jumbo
-  frames are used.
+* BBFRAMEs can be fragmented into multiple UDP packets in any way.
+  
+The CLI application tries to recover from dropped UDP packets.
 
-If these rules are followed, `dvb-gse` will try to recover gracefully from lost
-UDP packets.
+### UDP packets with complete BBFRAMES (`--input "UDP complete")
+
+This corresponds to BBFRAMEs carried in a single UDP packet (it will typically
+be a jumbo packet). The following rules need to be followed.
+
+* Each BBFRAME should be completely contained at the start of a single UDP
+  packet.
+
+* There can be padding or any other data following the BBFRAME in the same UDP
+  packet.
+
+UDP packets can be dropped. The CLI application will handle this gracefully.
+
+### TCP stream (`--input TCP`)
+
+This corresponds to receiving BBFRAMEs in a TCP stream. The CLI application acts
+as server. The following rules need to be followed.
+
+* BBFRAMEs need to be present back to back in the TCP stream.
+
+* BBFRAMEs padding must be remoted. The length of the BBFRAMEs in the stream
+  must equal 10 bytes for the BBHEADER plus the value of their DFL dividided by 8.
+
+* No other data can be present in the TCP stream.
+
+If an error occurrs or the client closes the connection, the CLI application
+will continue listen for new clients.
 
 ## API documentation
 
