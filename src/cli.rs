@@ -200,7 +200,7 @@ pub fn main() -> Result<()> {
                 }
                 app.bbframe_recv = Some(BBFrameStream::new(stream));
                 if let Err(err) = app.app_loop() {
-                    log::error!("error; waiting for another client: {err}");
+                    log::error!("error; waiting for another client: {err:#}");
                 }
             }
         }

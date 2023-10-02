@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Do not fail if a packet cannot be written to the TUN.
+- Add cause when logging errors for the TCP server.
 
 ## [0.4.1] - 2023-09-29
 
