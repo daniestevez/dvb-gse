@@ -133,9 +133,9 @@ impl<D: BBFrameReceiver> AppLoop<D> {
                 }
             };
             for pdu in self.gsepacket_defrag.defragment(&bbframe) {
-                self.tun
-                    .send(pdu.data())
-                    .context("failed to send PDU to TUN device")?;
+                if let Err(err) = self.tun.send(pdu.data()) {
+                    log::error!("could not write packet to TUN device: {err}");
+                }
             }
         }
     }
