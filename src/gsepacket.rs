@@ -43,6 +43,10 @@ impl GSEPacket {
             log::error!("GSE Packet not fully contained inside bytes");
             return None;
         }
+        if total_len < header_len {
+            log::error!("GSE Packet total length is smaller than header length");
+            return None;
+        }
         let data = bytes.slice(header_len..total_len);
         Some(GSEPacket { header, data })
     }
