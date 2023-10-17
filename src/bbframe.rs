@@ -33,7 +33,7 @@ pub struct BBFrameDefrag<R> {
 /// BBFRAME receiver.
 ///
 /// This receives complete BBFRAMEs from an object that implements the
-/// [`RecvBBFrame`] trait and performs validation to return full BBFRAMES.
+/// [`RecvBBFrame`] trait and performs validation to return valid BBFRAMES.
 #[derive(Debug)]
 pub struct BBFrameRecv<R> {
     recv_bbframe: R,
@@ -44,7 +44,7 @@ pub struct BBFrameRecv<R> {
 /// BBFRAME stream receiver.
 ///
 /// This receives BBFRAMEs from a stream object that implements the
-/// [`RecvStream`] trait and performs validation to return full BBFRAMES.
+/// [`RecvStream`] trait and performs validation to return valid BBFRAMES.
 #[derive(Debug)]
 pub struct BBFrameStream<R> {
     recv_stream: R,
@@ -90,7 +90,7 @@ pub type BBFrame = Bytes;
 /// The BBFRAME fragments are required to be such that the start of each BBFRAME
 /// is always at the start of a fragment. The BBFRAMEs may or may not have
 /// padding at the end. The `recv_fragment` function is allowed to skip
-/// suppyling some fragments, which happens for instance if UDP packets are lost
+/// supplying some fragments, which happens for instance if UDP packets are lost
 /// (when this trait is implemented by a UDP socket).
 pub trait RecvFragment {
     /// Receives a single fragment into the buffer. On success, returns the
@@ -197,12 +197,12 @@ macro_rules! impl_set_isi {
     ($t:ident) => {
         /// Set the ISI (Input Stream Indicator) to process.
         ///
-        /// When this function is called with `Some(n)`, the defragmenter will
-        /// expect an MIS (Multiple Input Stream) signal and will only process the
-        /// indicated ISI. When this function is called with `None`, the
-        /// defragmenter will expect a SIS (Single Input Stream) signal.
+        /// When this function is called with `Some(n)`, the BBFRAME receiver
+        /// will expect an MIS (Multiple Input Stream) signal and will only
+        /// process the indicated ISI. When this function is called with `None`,
+        /// the defragmenter will expect a SIS (Single Input Stream) signal.
         ///
-        /// The default after the construction of [`$t`] is SIS mode.
+        /// The default after the construction of the receiver is SIS mode.
         pub fn set_isi(&mut self, isi: Option<u8>) {
             self.validator.set_isi(isi);
         }
@@ -283,7 +283,7 @@ impl<R> BBFrameRecv<R> {
 impl<R: RecvBBFrame> BBFrameReceiver for BBFrameRecv<R> {
     /// Get and return a new validated BBFRAME.
     ///
-    /// This function calls the [`RecvBBFrame::recv_bbframe] method of the
+    /// This function calls the [`RecvBBFrame::recv_bbframe`] method of the
     /// `RecvBBFrame` object owned by the receiver and validates the received
     /// BBFRAME, returning an error if the BBFRAME is not valid or if there is
     /// an error in reception.
