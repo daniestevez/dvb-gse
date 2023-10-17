@@ -11,6 +11,10 @@ use bytes::Bytes;
 use std::io::{Read, Result};
 use std::net::UdpSocket;
 
+// This import is used by rustdoc
+#[allow(unused_imports)]
+use std::net::TcpStream;
+
 /// Maximum BBFRAME length in bytes.
 ///
 /// The maximum BBFRAME size possible corresponds to r=9/10 DVB-S2 with normal
