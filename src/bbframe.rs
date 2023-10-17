@@ -27,7 +27,7 @@ pub struct BBFrameDefrag<R> {
     recv_fragment: R,
     buffer: Box<[u8; BBFRAME_MAX_LEN]>,
     occupied_bytes: usize,
-    validator: Validator,
+    validator: BBFrameValidator,
 }
 
 /// BBFRAME receiver.
@@ -38,7 +38,7 @@ pub struct BBFrameDefrag<R> {
 pub struct BBFrameRecv<R> {
     recv_bbframe: R,
     buffer: Box<[u8; BBFRAME_MAX_LEN]>,
-    validator: Validator,
+    validator: BBFrameValidator,
 }
 
 /// BBFRAME stream receiver.
@@ -49,7 +49,7 @@ pub struct BBFrameRecv<R> {
 pub struct BBFrameStream<R> {
     recv_stream: R,
     buffer: Box<[u8; BBFRAME_MAX_LEN]>,
-    validator: Validator,
+    validator: BBFrameValidator,
 }
 
 /// Receiver of BBFrames.
@@ -61,18 +61,94 @@ pub trait BBFrameReceiver {
     fn get_bbframe(&mut self) -> Result<BBFrame>;
 }
 
+/// BBFRAME validator.
+///
+/// This object checks if a BBFRAME is a valid BBFRAME containing GSE data in
+/// the appropriate ISI (Input Stream Indicator).
 #[derive(Debug, Default)]
-struct Validator {
+pub struct BBFrameValidator {
     isi: Option<u8>,
 }
 
-impl Validator {
-    fn new() -> Validator {
-        Validator::default()
+impl BBFrameValidator {
+    /// Creates a BBFRAME validator.
+    pub fn new() -> BBFrameValidator {
+        BBFrameValidator::default()
     }
 
-    fn set_isi(&mut self, isi: Option<u8>) {
+    /// Set the ISI (Input Stream Indicator) to process.
+    ///
+    /// When this function is called with `Some(n)`, the validator will expect
+    /// an MIS (Multiple Input Stream) signal and only declare as valid BBFRAMEs
+    /// from the the indicated ISI. When this function is called with `None`,
+    /// the validator will expect a SIS (Single Input Stream) signal.
+    ///
+    /// The default after the construction of the validator is SIS mode.
+    pub fn set_isi(&mut self, isi: Option<u8>) {
         self.isi = isi;
+    }
+
+    /// Checks if a BBHEADER is valid.
+    ///
+    /// The following conditions are tested:
+    ///
+    /// - CRC of the BBHEADER.
+    ///
+    /// - TS/GS type matching generic continuous.
+    ///
+    /// - SIS/MIS and ISI matching what expected according to the last
+    /// [`BBFrameValidator::set_isi`] call.
+    ///
+    /// - ISSYI disabled.
+    ///
+    /// - The DFL is a multiple of 8 bits and not larger than the maximum
+    /// BBFRAME length.
+    ///
+    /// If the BBFRAME is not valid, this function logs the reason using
+    /// the [`log`] crate.
+    pub fn bbheader_is_valid(&self, bbheader: BBHeader) -> bool {
+        if !bbheader.crc_is_valid() {
+            return false;
+        }
+        log::trace!("received {} with valid CRC", bbheader);
+        if !matches!(bbheader.tsgs(), TsGs::GenericContinuous) {
+            log::error!(
+                "unsupported TS/GS type '{}' (only 'Generic continous' is supported)",
+                bbheader.tsgs()
+            );
+            return false;
+        }
+        match self.isi {
+            None => {
+                if !matches!(bbheader.sismis(), SisMis::Sis) {
+                    log::error!("MIS (multiple input stream) BBFRAME unsupported in SIS mode");
+                    return false;
+                }
+            }
+            Some(isi) => {
+                if !matches!(bbheader.sismis(), SisMis::Mis) {
+                    log::error!("SIS (single input stream) BBFRAME unsupported in MIS mode");
+                    return false;
+                }
+                if bbheader.isi() != isi {
+                    log::debug!("dropping BBFRAME with ISI = {}", bbheader.isi());
+                    return false;
+                }
+            }
+        }
+        if bbheader.issyi() {
+            log::error!("ISSYI unsupported");
+            return false;
+        }
+        if bbheader.dfl() % 8 != 0 {
+            log::error!("unsupported data field length not a multiple of 8 bits");
+            return false;
+        }
+        if usize::from(bbheader.dfl() / 8) > BBFRAME_MAX_LEN - BBHeader::LEN {
+            log::error!("DFL value {} too large", bbheader.dfl());
+            return false;
+        }
+        true
     }
 }
 
@@ -219,7 +295,7 @@ impl<R> BBFrameDefrag<R> {
             recv_fragment,
             buffer: Box::new([0; BBFRAME_MAX_LEN]),
             occupied_bytes: 0,
-            validator: Validator::new(),
+            validator: BBFrameValidator::new(),
         }
     }
 
@@ -273,7 +349,7 @@ impl<R> BBFrameRecv<R> {
         BBFrameRecv {
             recv_bbframe,
             buffer: Box::new([0; BBFRAME_MAX_LEN]),
-            validator: Validator::new(),
+            validator: BBFrameValidator::new(),
         }
     }
 
@@ -328,7 +404,7 @@ impl<R> BBFrameStream<R> {
         BBFrameStream {
             recv_stream,
             buffer: Box::new([0; BBFRAME_MAX_LEN]),
-            validator: Validator::new(),
+            validator: BBFrameValidator::new(),
         }
     }
 
@@ -366,53 +442,6 @@ impl<R: RecvStream> BBFrameReceiver for BBFrameStream<R> {
         let bbframe = Bytes::copy_from_slice(&self.buffer[..bbframe_len]);
         log::trace!("completed BBFRAME {:?}", bbframe);
         Ok(bbframe)
-    }
-}
-
-impl Validator {
-    fn bbheader_is_valid(&self, bbheader: BBHeader) -> bool {
-        if !bbheader.crc_is_valid() {
-            return false;
-        }
-        log::trace!("received {} with valid CRC", bbheader);
-        if !matches!(bbheader.tsgs(), TsGs::GenericContinuous) {
-            log::error!(
-                "unsupported TS/GS type '{}' (only 'Generic continous' is supported)",
-                bbheader.tsgs()
-            );
-            return false;
-        }
-        match self.isi {
-            None => {
-                if !matches!(bbheader.sismis(), SisMis::Sis) {
-                    log::error!("MIS (multiple input stream) BBFRAME unsupported in SIS mode");
-                    return false;
-                }
-            }
-            Some(isi) => {
-                if !matches!(bbheader.sismis(), SisMis::Mis) {
-                    log::error!("SIS (single input stream) BBFRAME unsupported in MIS mode");
-                    return false;
-                }
-                if bbheader.isi() != isi {
-                    log::debug!("dropping BBFRAME with ISI = {}", bbheader.isi());
-                    return false;
-                }
-            }
-        }
-        if bbheader.issyi() {
-            log::error!("ISSYI unsupported");
-            return false;
-        }
-        if bbheader.dfl() % 8 != 0 {
-            log::error!("unsupported data field length not a multiple of 8 bits");
-            return false;
-        }
-        if usize::from(bbheader.dfl() / 8) > BBFRAME_MAX_LEN - BBHeader::LEN {
-            log::error!("DFL value {} too large", bbheader.dfl());
-            return false;
-        }
-        true
     }
 }
 
