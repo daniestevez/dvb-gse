@@ -336,3 +336,33 @@ mod test {
         assert_eq!(pdu.label().as_slice(), hex!("02 00 48 55 4c 4b"));
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    prop_compose! {
+        fn garbage()
+            (g in proptest::collection::vec(
+                proptest::collection::vec(any::<u8>(), 0..10000), 0..100))
+             -> Vec<BBFrame> {
+                g.into_iter().map(|v| Bytes::copy_from_slice(&v)).collect::<Vec<BBFrame>>()
+            }
+    }
+
+    proptest! {
+        #[test]
+        #[ignore = "this makes the defragmenter panic at the moment"]
+        fn defrag_garbage(garbage_bbframes in garbage()) {
+            let mut defrag = GSEPacketDefrag::new();
+            for bbframe in &garbage_bbframes {
+                for pdu in defrag.defragment(&bbframe) {
+                    pdu.data();
+                    pdu.protocol_type();
+                    pdu.label();
+                }
+            }
+        }
+    }
+}
