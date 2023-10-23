@@ -282,6 +282,7 @@ mod test {
         assert_eq!(header.ccmacm(), CcmAcm::Ccm);
         assert!(!header.issyi());
         assert!(!header.npd());
+        assert!(!header.gse_lite());
         assert_eq!(header.rolloff(), RollOff::Ro0_20);
         assert_eq!(header.isi(), 0);
         assert_eq!(header.upl(), 0);
@@ -291,5 +292,34 @@ mod test {
         assert_eq!(header.crc8(), CONTINUOUS_GSE_HEADER[9]);
         assert_eq!(header.compute_crc8(), header.crc8());
         assert!(header.crc_is_valid());
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn doesnt_panic(header: [u8; 10]) {
+            let header = BBHeader::new(&header);
+            header.tsgs();
+            header.sismis();
+            header.ccmacm();
+            header.issyi();
+            header.npd();
+            header.gse_lite();
+            header.rolloff();
+            header.isi();
+            header.upl();
+            header.dfl();
+            header.sync();
+            header.syncd();
+            header.crc8();
+            header.compute_crc8();
+            header.crc_is_valid();
+            format!("{header}");
+        }
     }
 }

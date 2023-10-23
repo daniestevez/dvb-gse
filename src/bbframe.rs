@@ -454,7 +454,7 @@ mod test {
     use super::*;
     use hex_literal::hex;
 
-    const SINGLE_FRAGMENT: [u8; 104] = hex!(
+    pub const SINGLE_FRAGMENT: [u8; 104] = hex!(
         "72 00 00 00 02 f0 00 00 00 15 c0 5c 08 00 02 00
          48 55 4c 4b 45 00 00 54 6f aa 40 00 40 01 72 fc
          2c 00 00 01 2c 00 00 02 08 00 4e 94 00 3b 00 04
@@ -552,6 +552,26 @@ mod test {
          ac ad ae af"
     );
 
+    const SINGLE_FRAGMENT_MIS: [u8; 104] = hex!(
+        "52 2a 00 00 02 f0 00 00 00 dc c0 5c 08 00 02 00
+         48 55 4c 4b 45 00 00 54 6f aa 40 00 40 01 72 fc
+         2c 00 00 01 2c 00 00 02 08 00 4e 94 00 3b 00 04
+         19 7d 6b 63 00 00 00 00 5d 79 08 00 00 00 00 00
+         10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f
+         20 21 22 23 24 25 26 27 28 29 2a 2b 2c 2d 2e 2f
+         30 31 32 33 34 35 36 37"
+    );
+
+    const SINGLE_FRAGMENT_MIS_OTHER_STREAM: [u8; 104] = hex!(
+        "52 2b 00 00 02 f0 00 00 00 9f c0 5c 08 00 02 00
+         48 55 4c 4b 45 00 00 54 6f aa 40 00 40 01 72 fc
+         2c 00 00 01 2c 00 00 02 08 00 4e 94 00 3b 00 04
+         19 7d 6b 63 00 00 00 00 5d 79 08 00 00 00 00 00
+         10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f
+         20 21 22 23 24 25 26 27 28 29 2a 2b 2c 2d 2e 2f
+         30 31 32 33 34 35 36 37"
+    );
+
     static MULTIPLE_FRAGMENTS: [&'static [u8]; 3] = [&FRAGMENT0, &FRAGMENT1, &FRAGMENT2];
 
     #[test]
@@ -567,6 +587,28 @@ mod test {
             Bytes::from_static(&SINGLE_FRAGMENT)
         );
         assert_eq!(times_called.get(), 1);
+    }
+
+    #[test]
+    fn single_fragment_defrag_mis() {
+        let isi = 0x2a;
+        let times_called = std::cell::Cell::new(0);
+        let mut defrag = BBFrameDefrag::new(|buff: &mut [u8]| {
+            let fragment = if times_called.get() % 2 == 0 {
+                &SINGLE_FRAGMENT_MIS_OTHER_STREAM
+            } else {
+                &SINGLE_FRAGMENT_MIS
+            };
+            times_called.replace(times_called.get() + 1);
+            buff[..fragment.len()].copy_from_slice(fragment);
+            Ok(fragment.len())
+        });
+        defrag.set_isi(Some(isi));
+        assert_eq!(
+            defrag.get_bbframe().unwrap(),
+            Bytes::from_static(&SINGLE_FRAGMENT_MIS)
+        );
+        assert_eq!(times_called.get(), 2);
     }
 
     #[test]
@@ -609,5 +651,168 @@ mod test {
             defrag.get_bbframe().unwrap(),
             Bytes::from_static(&SINGLE_FRAGMENT)
         );
+    }
+
+    #[test]
+    fn validator() {
+        let valid_header = hex!("72 00 00 00 02 f0 00 00 00 15");
+        let mut validator = BBFrameValidator::new();
+        assert!(validator.bbheader_is_valid(BBHeader::new(&valid_header)));
+
+        let wrong_crc = hex!("72 00 00 00 02 f0 00 00 00 14");
+        assert!(!BBHeader::new(&wrong_crc).crc_is_valid());
+        assert!(!validator.bbheader_is_valid(BBHeader::new(&wrong_crc)));
+
+        fn test_invalid(validator: &BBFrameValidator, bbheader: &[u8; 10]) {
+            let bbheader = BBHeader::new(bbheader);
+            assert!(bbheader.crc_is_valid());
+            assert!(!validator.bbheader_is_valid(bbheader));
+        }
+
+        let ts_header = hex!("f2 00 00 00 02 f0 00 00 00 44");
+        test_invalid(&validator, &ts_header);
+        let packetized_header = hex!("32 00 00 00 02 f0 00 00 00 d7");
+        test_invalid(&validator, &packetized_header);
+        let hem_header = hex!("b2 00 00 00 02 f0 00 00 00 86");
+        test_invalid(&validator, &hem_header);
+        let mis_header = hex!("52 2a 00 00 02 f0 00 00 00 dc");
+        test_invalid(&validator, &mis_header);
+        let issyi_header = hex!("7a 00 00 00 02 f0 00 00 00 78");
+        test_invalid(&validator, &issyi_header);
+        let dfl_not_divisible = hex!("72 00 00 00 02 f1 00 00 00 50");
+        test_invalid(&validator, &dfl_not_divisible);
+        let dfl_too_large = hex!("72 00 00 00 e3 08 00 00 00 36");
+        test_invalid(&validator, &dfl_too_large);
+
+        let isi = 0x2a;
+        validator.set_isi(Some(isi));
+        assert!(!validator.bbheader_is_valid(BBHeader::new(&valid_header)));
+        assert!(validator.bbheader_is_valid(BBHeader::new(&mis_header)));
+        let other_isi_header = hex!("52 2b 00 00 02 f0 00 00 00 9f");
+        test_invalid(&validator, &other_isi_header);
+
+        validator.set_isi(None);
+        assert!(validator.bbheader_is_valid(BBHeader::new(&valid_header)));
+        assert!(!validator.bbheader_is_valid(BBHeader::new(&mis_header)));
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    use super::test::SINGLE_FRAGMENT;
+    use super::*;
+    use proptest::prelude::*;
+
+    fn garbage() -> impl Strategy<Value = Vec<Vec<u8>>> {
+        proptest::collection::vec(proptest::collection::vec(any::<u8>(), 1..10000), 0..100)
+    }
+
+    proptest! {
+        /// Supplies garbage fragments from a Vec until all the garbage
+        /// fragments are exhausted. Then it supplies a valid single
+        /// fragment. The defragmenter must obtain the good frame without
+        /// failing.
+        #[test]
+        fn bbframe_defrag_garbage(garbage_data in garbage()) {
+            let times_called = std::cell::Cell::new(0);
+            let single_fragment = SINGLE_FRAGMENT.to_vec();
+            let mut defrag = BBFrameDefrag::new(|buff: &mut [u8]| {
+                let j = times_called.get();
+                let fragment = if j < garbage_data.len() {
+                    &garbage_data[j]
+                } else {
+                    // Used to force termination of get_bbframe succesfully
+                    // (sometimes there is an earlier exit if the garbage is a
+                    // valid frame just by chance).
+                    &single_fragment
+                };
+                times_called.replace(times_called.get() + 1);
+                let copy_len = fragment.len().min(buff.len());
+                buff[..copy_len].copy_from_slice(&fragment[..copy_len]);
+                Ok(fragment.len())
+            });
+            let bbframe = defrag.get_bbframe().unwrap();
+            // Sometimes
+            //   times_called.get() == garbage_data.len() + 2
+            // because the SINGLE_FRAGMENT needs to be returned
+            // twice in order to flush a partial BBHEADER left
+            // by the garbage.
+            assert!(times_called.get() <= garbage_data.len() + 2);
+            if times_called.get() >= garbage_data.len() + 1 {
+                assert_eq!(bbframe, Bytes::from_static(&SINGLE_FRAGMENT));
+            }
+        }
+    }
+
+    proptest! {
+        /// Supplies garbage frames from a Vec until all the garbage frames are
+        /// exhausted, then a valid fragment. The receiver get_bbframe() is
+        /// allowed to fail, but it is called repeatedly until all the garbage
+        /// has been consumed.
+        #[test]
+        fn bbframe_recv_garbage(garbage_data in garbage()) {
+            let times_called = std::cell::Cell::new(0);
+            let single_fragment = SINGLE_FRAGMENT.to_vec();
+            let mut recv = BBFrameRecv::new(|buff: &mut [u8; BBFRAME_MAX_LEN]| {
+                let j = times_called.get();
+                let fragment = if j < garbage_data.len() {
+                    &garbage_data[j]
+                } else {
+                    // Used to force termination of get_bbframe succesfully
+                    // (sometimes there is an earlier exit if the garbage is a
+                    // valid frame just by chance).
+                    &single_fragment
+                };
+                times_called.replace(times_called.get() + 1);
+                let copy_len = fragment.len().min(buff.len());
+                buff[..copy_len].copy_from_slice(&fragment[..copy_len]);
+                Ok(fragment.len())
+            });
+            while times_called.get() <= garbage_data.len() {
+                if let Ok(bbframe) = recv.get_bbframe() {
+                    assert!(times_called.get() <= garbage_data.len() + 1);
+                    if times_called.get() >= garbage_data.len() + 1 {
+                        assert_eq!(bbframe, Bytes::from_static(&SINGLE_FRAGMENT));
+                    }
+                }
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct Garbage {
+        times_called: std::rc::Rc<std::cell::Cell<usize>>,
+        garbage_data: Vec<Vec<u8>>,
+    }
+
+    impl RecvStream for Garbage {
+        fn recv_stream(&mut self, buff: &mut [u8]) -> Result<()> {
+            let j = self.times_called.get();
+            self.times_called.replace(j + 1);
+            let fragment = if j < self.garbage_data.len() {
+                &self.garbage_data[j]
+            } else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "no more garbage",
+                ));
+            };
+            let copy_len = fragment.len().min(buff.len());
+            buff[..copy_len].copy_from_slice(&fragment[..copy_len]);
+            Ok(())
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn bbframe_stream_garbage(garbage_data in garbage()) {
+            let times_called = std::rc::Rc::new(std::cell::Cell::new(0));
+            let len_garbage_data = garbage_data.len();
+            let mut stream = BBFrameStream::new(Garbage { times_called: times_called.clone(),
+                                                          garbage_data });
+            while times_called.get() < len_garbage_data {
+                let _ = stream.get_bbframe();
+            }
+        }
     }
 }

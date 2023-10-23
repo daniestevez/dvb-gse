@@ -356,4 +356,194 @@ mod test {
     fn too_short() {
         assert!(GSEHeader::from_slice(&GSE_HEADER_SINGLE_PACKET[..9], None).is_none());
     }
+
+    const GSE_HEADER_FIRST_FRAGMENT: [u8; 13] = hex!("80 5c 17 01 23 08 00 02 00 48 55 4c 4b");
+
+    #[test]
+    fn first_fragment() {
+        let header = GSEHeader::from_slice(&GSE_HEADER_FIRST_FRAGMENT, None).unwrap();
+        assert_eq!(
+            format!("{}", header),
+            "GSE Header (S = true, E = false, LT = 6 byte label, \
+             GSE Length = 92 bytes, Fragment ID = 23, Total Length = 291, \
+             Protocol Type = 0x0800, Label = 02:00:48:55:4c:4b)"
+        );
+        assert!(header.start());
+        assert!(!header.end());
+        assert!(!header.is_single_fragment());
+        assert_eq!(header.label_type(), LabelType::Label6Byte);
+        assert_eq!(header.gse_length(), 92);
+        assert_eq!(header.fragment_id(), Some(23));
+        assert_eq!(header.total_length(), Some(291));
+        assert_eq!(header.protocol_type(), Some(0x0800));
+        let label = header.label().unwrap();
+        assert_eq!(label.as_slice(), &GSE_HEADER_FIRST_FRAGMENT[7..]);
+        assert_eq!(label.len(), 6);
+        assert!(!label.is_empty());
+        assert_eq!(header.len(), GSE_HEADER_FIRST_FRAGMENT.len());
+        assert!(!header.is_empty());
+    }
+
+    const GSE_HEADER_INTERMEDIATE_FRAGMENT: [u8; 3] = hex!("30 5c 17");
+
+    #[test]
+    fn intermediate_fragment() {
+        let header = GSEHeader::from_slice(&GSE_HEADER_INTERMEDIATE_FRAGMENT, None).unwrap();
+        assert_eq!(
+            format!("{}", header),
+            "GSE Header (S = false, E = false, LT = label re-use, \
+             GSE Length = 92 bytes, Fragment ID = 23)"
+        );
+        assert!(!header.start());
+        assert!(!header.end());
+        assert!(!header.is_single_fragment());
+        assert_eq!(header.label_type(), LabelType::ReUse);
+        assert_eq!(header.gse_length(), 92);
+        assert_eq!(header.fragment_id(), Some(23));
+        assert_eq!(header.total_length(), None);
+        assert_eq!(header.protocol_type(), None);
+        assert_eq!(header.label(), None);
+        assert_eq!(header.len(), GSE_HEADER_INTERMEDIATE_FRAGMENT.len());
+        assert!(!header.is_empty());
+    }
+
+    const GSE_HEADER_LAST_FRAGMENT: [u8; 3] = hex!("70 5c 17");
+
+    #[test]
+    fn last_fragment() {
+        let header = GSEHeader::from_slice(&GSE_HEADER_LAST_FRAGMENT, None).unwrap();
+        assert_eq!(
+            format!("{}", header),
+            "GSE Header (S = false, E = true, LT = label re-use, \
+             GSE Length = 92 bytes, Fragment ID = 23)"
+        );
+        assert!(!header.start());
+        assert!(header.end());
+        assert!(!header.is_single_fragment());
+        assert_eq!(header.label_type(), LabelType::ReUse);
+        assert_eq!(header.gse_length(), 92);
+        assert_eq!(header.fragment_id(), Some(23));
+        assert_eq!(header.total_length(), None);
+        assert_eq!(header.protocol_type(), None);
+        assert_eq!(header.label(), None);
+        assert_eq!(header.len(), GSE_HEADER_LAST_FRAGMENT.len());
+        assert!(!header.is_empty());
+    }
+
+    const GSE_HEADER_SINGLE_PACKET_3BYTE_LABEL: [u8; 7] = hex!("d0 5c 08 00 55 4c 4b");
+
+    #[test]
+    fn single_packet_3byte_label() {
+        let header = GSEHeader::from_slice(&GSE_HEADER_SINGLE_PACKET_3BYTE_LABEL, None).unwrap();
+        assert_eq!(
+            format!("{}", header),
+            "GSE Header (S = true, E = true, LT = 3 byte label, \
+	     GSE Length = 92 bytes, Protocol Type = 0x0800, \
+	     Label = 55:4c:4b)"
+        );
+        assert!(header.start());
+        assert!(header.end());
+        assert!(header.is_single_fragment());
+        assert_eq!(header.label_type(), LabelType::Label3Byte);
+        assert_eq!(header.gse_length(), 92);
+        assert_eq!(header.fragment_id(), None);
+        assert_eq!(header.total_length(), None);
+        assert_eq!(header.protocol_type(), Some(0x0800));
+        let label = header.label().unwrap();
+        assert_eq!(label.as_slice(), &GSE_HEADER_SINGLE_PACKET_3BYTE_LABEL[4..]);
+        assert_eq!(label.len(), 3);
+        assert!(!label.is_empty());
+        assert_eq!(header.len(), GSE_HEADER_SINGLE_PACKET_3BYTE_LABEL.len());
+        assert!(!header.is_empty());
+    }
+
+    const GSE_HEADER_SINGLE_PACKET_BROADCAST_LABEL: [u8; 4] = hex!("e0 5c 08 00");
+
+    #[test]
+    fn single_packet_broadcast_label() {
+        let header =
+            GSEHeader::from_slice(&GSE_HEADER_SINGLE_PACKET_BROADCAST_LABEL, None).unwrap();
+        assert_eq!(
+            format!("{}", header),
+            "GSE Header (S = true, E = true, LT = broadcast label, \
+	     GSE Length = 92 bytes, Protocol Type = 0x0800, Label = broadcast)"
+        );
+        assert!(header.start());
+        assert!(header.end());
+        assert!(header.is_single_fragment());
+        assert_eq!(header.label_type(), LabelType::Broadcast);
+        assert_eq!(header.gse_length(), 92);
+        assert_eq!(header.fragment_id(), None);
+        assert_eq!(header.total_length(), None);
+        assert_eq!(header.protocol_type(), Some(0x0800));
+        let label = header.label().unwrap();
+        assert_eq!(label.as_slice(), &[]);
+        assert_eq!(label.len(), 0);
+        assert!(label.is_empty());
+        assert_eq!(header.len(), GSE_HEADER_SINGLE_PACKET_BROADCAST_LABEL.len());
+        assert!(!header.is_empty());
+    }
+
+    const GSE_HEADER_SINGLE_PACKET_LABEL_REUSE: [u8; 4] = hex!("f0 5c 08 00");
+
+    #[test]
+    fn single_packet_label_reuse() {
+        let g0 = GSEHeader::from_slice(&GSE_HEADER_SINGLE_PACKET, None).unwrap();
+        let re_used_label = g0.label().unwrap();
+        let header =
+            GSEHeader::from_slice(&GSE_HEADER_SINGLE_PACKET_LABEL_REUSE, Some(re_used_label))
+                .unwrap();
+        assert_eq!(
+            format!("{}", header),
+            "GSE Header (S = true, E = true, LT = label re-use, \
+	     GSE Length = 92 bytes, Protocol Type = 0x0800, \
+             Label = 02:00:48:55:4c:4b)"
+        );
+        assert!(header.start());
+        assert!(header.end());
+        assert!(header.is_single_fragment());
+        assert_eq!(header.label_type(), LabelType::ReUse);
+        assert_eq!(header.gse_length(), 92);
+        assert_eq!(header.fragment_id(), None);
+        assert_eq!(header.total_length(), None);
+        assert_eq!(header.protocol_type(), Some(0x0800));
+        let label = header.label().unwrap();
+        assert_eq!(label, re_used_label);
+        assert_eq!(header.len(), GSE_HEADER_SINGLE_PACKET_LABEL_REUSE.len());
+        assert!(!header.is_empty());
+    }
+
+    #[test]
+    fn padding_packet() {
+        assert_eq!(GSEHeader::from_slice(&[0; 2], None), None);
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn random_header(header in proptest::collection::vec(any::<u8>(), 0..=32)) {
+            if let Some(header) = GSEHeader::from_slice(&header, None) {
+                format!("{}", header);
+                header.start();
+                header.end();
+                header.is_single_fragment();
+                header.label_type();
+                header.gse_length();
+                header.fragment_id();
+                header.total_length();
+                header.protocol_type();
+                if let Some(label) = header.label() {
+                    label.as_slice();
+                    assert_eq!(label.is_empty(), label.len() == 0);
+                }
+                assert!(header.len() >= 3);
+                assert!(!header.is_empty());
+            }
+        }
+    }
 }
