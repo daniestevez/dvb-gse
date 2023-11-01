@@ -11,6 +11,7 @@ use super::gseheader::{GSEHeader, Label};
 use bytes::Bytes;
 use crc::Digest;
 use std::collections::HashMap;
+use thiserror::Error;
 
 /// GSE Packet.
 ///
@@ -19,6 +20,14 @@ use std::collections::HashMap;
 pub struct GSEPacket {
     header: GSEHeader,
     data: Bytes,
+}
+
+/// GSE protocol error.
+#[derive(Error, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum GSEError {
+    /// The BBFRAME is shorter than the BBHEADER length.
+    #[error("the BBFRAME is shorter than the BBHEADER length")]
+    BBFrameShort,
 }
 
 lazy_static::lazy_static! {
@@ -56,10 +65,16 @@ impl GSEPacket {
     /// This function returns an iterator that returns the GSE Packets contained
     /// in the BBFRAME. The iterator stops when the end of the BBFRAME is
     /// reached or when a malformed GSE Packet is found.
-    pub fn split_bbframe(bbframe: &BBFrame) -> impl Iterator<Item = GSEPacket> {
+    ///
+    /// The function returns an error if the BBFRAME is malformed. For instance,
+    /// if the BBFRAME length is shorter than the BBHEADER length.
+    pub fn split_bbframe(bbframe: &BBFrame) -> Result<impl Iterator<Item = GSEPacket>, GSEError> {
+        if bbframe.len() < BBHeader::LEN {
+            return Err(GSEError::BBFrameShort);
+        }
         let mut remain = bbframe.slice(BBHeader::LEN..);
         let mut label = None;
-        std::iter::from_fn(move || {
+        Ok(std::iter::from_fn(move || {
             if let Some(packet) = GSEPacket::from_bytes(&remain, label.as_ref()) {
                 log::debug!("extracted GSE Packet with header {}", packet.header());
                 log::trace!("GSE Packet data field {:?}", packet.data());
@@ -72,7 +87,7 @@ impl GSEPacket {
                 log::debug!("no more GSE Packets in BBFRAME");
                 None
             }
-        })
+        }))
     }
 
     /// Gives the length of the GSE Packet in bytes.
@@ -184,8 +199,14 @@ impl GSEPacketDefrag {
     ///
     /// This function returns an iterator that produces all the PDUs that can be
     /// completed with the GSE Packets found in the BBFRAME.
-    pub fn defragment(&mut self, bbframe: &BBFrame) -> impl Iterator<Item = PDU> + '_ {
-        GSEPacket::split_bbframe(bbframe).flat_map(|packet| self.defrag_packet(&packet))
+    ///
+    /// The function returns an error if the BBFRAME is malformed. For instance,
+    /// if the BBFRAME length is shorter than the BBHEADER length.
+    pub fn defragment(
+        &mut self,
+        bbframe: &BBFrame,
+    ) -> Result<impl Iterator<Item = PDU> + '_, GSEError> {
+        Ok(GSEPacket::split_bbframe(bbframe)?.flat_map(|packet| self.defrag_packet(&packet)))
     }
 
     fn defrag_packet(&mut self, packet: &GSEPacket) -> Option<PDU> {
@@ -328,7 +349,7 @@ mod test {
     fn defrag_single_packet() {
         let bbframe = Bytes::copy_from_slice(&SINGLE_PACKET);
         let mut defrag = GSEPacketDefrag::new();
-        let pdus: Vec<_> = defrag.defragment(&bbframe).collect();
+        let pdus: Vec<_> = defrag.defragment(&bbframe).unwrap().collect();
         assert_eq!(pdus.len(), 1);
         let pdu = &pdus[0];
         assert_eq!(&pdu.data()[..], &SINGLE_PACKET[20..]);
@@ -353,14 +374,15 @@ mod proptests {
 
     proptest! {
         #[test]
-        #[ignore = "this makes the defragmenter panic at the moment"]
         fn defrag_garbage(garbage_bbframes in garbage()) {
             let mut defrag = GSEPacketDefrag::new();
             for bbframe in &garbage_bbframes {
-                for pdu in defrag.defragment(&bbframe) {
-                    pdu.data();
-                    pdu.protocol_type();
-                    pdu.label();
+                if let Ok(pdus) = defrag.defragment(&bbframe) {
+                    for pdu in pdus {
+                        pdu.data();
+                        pdu.protocol_type();
+                        pdu.label();
+                    }
                 }
             }
         }
