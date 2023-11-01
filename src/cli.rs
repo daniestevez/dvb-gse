@@ -132,7 +132,9 @@ impl<D: BBFrameReceiver> AppLoop<D> {
                     }
                 }
             };
-            for pdu in self.gsepacket_defrag.defragment(&bbframe) {
+            // the BBFRAME was validated by bbframe_recv, so we can unwrap here
+            let pdus = self.gsepacket_defrag.defragment(&bbframe).unwrap();
+            for pdu in pdus {
                 if let Err(err) = self.tun.send(pdu.data()) {
                     log::error!("could not write packet to TUN device: {err}");
                 }
