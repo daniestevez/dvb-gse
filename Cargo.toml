@@ -5,8 +5,8 @@ edition = "2021"
 authors = ["Daniel Estevez <daniel@destevez.net>"]
 description = "DVB-GSE (Digital Video Brodcast Generic Stream Encapsulation)"
 license = "MIT OR Apache-2.0"
-homepage = "https://github.com/daniestevez/dvg-gse/"
-repository = "https://github.com/daniestevez/dvg-gse/"
+homepage = "https://github.com/daniestevez/dvb-gse/"
+repository = "https://github.com/daniestevez/dvb-gse/"
 keywords = ["dvb", "dvb-s2", "gse", "satellite", "network"]
 categories = ["aerospace::space-protocols", "command-line-utilities",
               "multimedia", "network-programming", ]
