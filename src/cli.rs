@@ -157,8 +157,10 @@ pub fn main() -> Result<()> {
             setup_multicast(&socket, &args.listen)?;
             match args.input {
                 InputFormat::UdpFragments => {
+                    let mut bbframe_recv = BBFrameDefrag::new(socket);
+                    bbframe_recv.set_isi(args.isi);
                     let mut app = AppLoop {
-                        bbframe_recv: Some(BBFrameDefrag::new(socket)),
+                        bbframe_recv: Some(bbframe_recv),
                         gsepacket_defrag,
                         tun,
                         bbframe_recv_errors_fatal: true,
@@ -166,8 +168,10 @@ pub fn main() -> Result<()> {
                     app.app_loop()?;
                 }
                 InputFormat::UdpComplete => {
+                    let mut bbframe_recv = BBFrameRecv::new(socket);
+                    bbframe_recv.set_isi(args.isi);
                     let mut app = AppLoop {
-                        bbframe_recv: Some(BBFrameRecv::new(socket)),
+                        bbframe_recv: Some(bbframe_recv),
                         gsepacket_defrag,
                         tun,
                         bbframe_recv_errors_fatal: false,
@@ -200,7 +204,9 @@ pub fn main() -> Result<()> {
                         "TCP client connected (but could not retrieve peer address): {err}"
                     ),
                 }
-                app.bbframe_recv = Some(BBFrameStream::new(stream));
+                let mut bbframe_recv = BBFrameStream::new(stream);
+                bbframe_recv.set_isi(args.isi);
+                app.bbframe_recv = Some(bbframe_recv);
                 if let Err(err) = app.app_loop() {
                     log::error!("error; waiting for another client: {err:#}");
                 }
