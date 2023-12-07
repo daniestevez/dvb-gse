@@ -58,8 +58,12 @@ This corresponds to BBFRAMEs fragmented into multiple UDP packets (since usually
 DVB-S2 BBFRAMEs are larger than a 1500 byte MTU). The following rules need to be
 followed.
 
-* The beginning of each BBFRAME should be aligned with the beginning of the
-  payload of a UDP packet.
+* The payload of each UDP packet can optionally be begin by a header of up to 64
+  bytes, which is discarded by this application. The header length is set with
+  the `--header-length` argument. By default, no header is assumed.
+
+* The beginning of each BBFRAME should happen at the end of a header, or at the
+  beginning of the payload of a UDP packet if there is no header.
 
 * The BBFRAME padding can either be removed or be present. If possible, it is
   recommended to remove the BBFRAME padding, in order to reduce the network
@@ -74,8 +78,12 @@ The CLI application tries to recover from dropped UDP packets.
 This corresponds to BBFRAMEs carried in a single UDP packet (it will typically
 be a jumbo packet). The following rules need to be followed.
 
-* Each BBFRAME should be completely contained at the start of a single UDP
-  packet.
+* The payload of each UDP packet can optionally be begin by a header of up to 64
+  bytes, which is discarded by this application. The header length is set with
+  the `--header-length` argument. By default, no header is assumed.
+
+* Each BBFRAME should be completely contained in a single UDP packet. The
+  BBFRAME should follow the header immediately.
 
 * There can be padding or any other data following the BBFRAME in the same UDP
   packet.
@@ -87,12 +95,19 @@ UDP packets can be dropped. The CLI application will handle this gracefully.
 This corresponds to receiving BBFRAMEs in a TCP stream. The CLI application acts
 as server. The following rules need to be followed.
 
-* BBFRAMEs need to be present back to back in the TCP stream.
+* Each BBFRAME can optionally be preceded by a header of up to 64 bytes, which
+  is discarded by this application. The header length is set with the
+  `--header-length` argument. By default, no header is assumed.
 
-* BBFRAMEs padding must be remoted. The length of the BBFRAMEs in the stream
-  must equal 10 bytes for the BBHEADER plus the value of their DFL dividided by 8.
+* BBFRAMEs (including their headers, if applicable) need to be present back to
+  back in the TCP stream.
 
-* No other data can be present in the TCP stream.
+* BBFRAMEs padding must be removed. The length of the BBFRAMEs in the stream
+  must equal 10 bytes for the BBHEADER plus the value of their DFL dividided by
+  8.
+
+* No other data besides the headers and BBFRAMEs can be present in the TCP
+  stream.
 
 If an error occurrs or the client closes the connection, the CLI application
 will continue listen for new clients.
