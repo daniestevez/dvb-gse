@@ -15,11 +15,22 @@ use std::net::UdpSocket;
 #[allow(unused_imports)]
 use std::net::TcpStream;
 
-/// Maximum BBFRAME length in bytes.
+/// Maximum header length in bytes.
+///
+/// This is used to allocate buffers for the BBFRAMEs, taking into account that
+/// they can optionally be preceded by a header whose maximum length is given by
+/// this constant. The value of the constant is set to a somewhat arbitrary
+/// choice that should be good for most use cases.
+pub const HEADER_MAX_LEN: usize = 64;
+
+/// Maximum BBFRAME length in bytes (including header).
 ///
 /// The maximum BBFRAME size possible corresponds to r=9/10 DVB-S2 with normal
 /// FECFRAMEs, which is 58192 bits or 7274 bytes.
-pub const BBFRAME_MAX_LEN: usize = 7274;
+///
+/// The constant includes the [`HEADER_MAX_LEN`] in the calculation of the
+/// maximum BBFRAME length.
+pub const BBFRAME_MAX_LEN: usize = 7274 + HEADER_MAX_LEN;
 
 /// BBFRAME defragmenter.
 ///
@@ -32,6 +43,7 @@ pub struct BBFrameDefrag<R> {
     buffer: Box<[u8; BBFRAME_MAX_LEN]>,
     occupied_bytes: usize,
     validator: BBFrameValidator,
+    header_bytes: usize,
 }
 
 /// BBFRAME receiver.
@@ -43,6 +55,7 @@ pub struct BBFrameRecv<R> {
     recv_bbframe: R,
     buffer: Box<[u8; BBFRAME_MAX_LEN]>,
     validator: BBFrameValidator,
+    header_bytes: usize,
 }
 
 /// BBFRAME stream receiver.
@@ -54,6 +67,7 @@ pub struct BBFrameStream<R> {
     recv_stream: R,
     buffer: Box<[u8; BBFRAME_MAX_LEN]>,
     validator: BBFrameValidator,
+    header_bytes: usize,
 }
 
 /// Receiver of BBFrames.
@@ -148,7 +162,7 @@ impl BBFrameValidator {
             log::error!("unsupported data field length not a multiple of 8 bits");
             return false;
         }
-        if usize::from(bbheader.dfl() / 8) > BBFRAME_MAX_LEN - BBHeader::LEN {
+        if usize::from(bbheader.dfl() / 8) > BBFRAME_MAX_LEN - BBHeader::LEN - HEADER_MAX_LEN {
             log::error!("DFL value {} too large", bbheader.dfl());
             return false;
         }
@@ -300,10 +314,31 @@ impl<R> BBFrameDefrag<R> {
             buffer: Box::new([0; BBFRAME_MAX_LEN]),
             occupied_bytes: 0,
             validator: BBFrameValidator::new(),
+            header_bytes: 0,
         }
     }
 
     impl_set_isi!(BBFrameDefrag);
+
+    /// Sets the number of bytes used in the header in each fragment.
+    ///
+    /// The header is removed before reading the rest of the fragment, which
+    /// should correpond to a BBFRAME fragment. By default, a header length of
+    /// zero bytes is assumed.
+    ///
+    /// The function returns an error if `header_bytes` is larger than
+    /// [`HEADER_MAX_LEN`].
+    pub fn set_header_bytes(&mut self, header_bytes: usize) -> Result<()> {
+        if header_bytes > HEADER_MAX_LEN {
+            log::error!("header bytes larger than maximum header size");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "header bytes larger than maximum header size",
+            ));
+        }
+        self.header_bytes = header_bytes;
+        Ok(())
+    }
 }
 
 impl<R: RecvFragment> BBFrameReceiver for BBFrameDefrag<R> {
@@ -339,7 +374,21 @@ impl<R: RecvFragment> BBFrameDefrag<R> {
         let n = self
             .recv_fragment
             .recv_fragment(&mut self.buffer[self.occupied_bytes..])?;
-        self.occupied_bytes += n;
+        if self.header_bytes != 0 {
+            if self.header_bytes > n {
+                log::error!("received a fragment smaller than the header size");
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "BBFRAME is too short",
+                ));
+            }
+            // overwrite the header with the rest of the data
+            self.buffer.copy_within(
+                self.occupied_bytes + self.header_bytes..self.occupied_bytes + n,
+                self.occupied_bytes,
+            );
+        }
+        self.occupied_bytes += n - self.header_bytes;
         Ok(())
     }
 }
@@ -354,10 +403,30 @@ impl<R> BBFrameRecv<R> {
             recv_bbframe,
             buffer: Box::new([0; BBFRAME_MAX_LEN]),
             validator: BBFrameValidator::new(),
+            header_bytes: 0,
         }
     }
 
     impl_set_isi!(BBFrameRecv);
+
+    /// Sets the number of bytes used in the header in each BBFRAME.
+    ///
+    /// The header is removed before reading the BBFRAME. By default, a header
+    /// length of zero bytes is assumed.
+    ///
+    /// The function returns an error if `header_bytes` is larger than
+    /// [`HEADER_MAX_LEN`].
+    pub fn set_header_bytes(&mut self, header_bytes: usize) -> Result<()> {
+        if header_bytes > HEADER_MAX_LEN {
+            log::error!("header bytes larger than maximum header size");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "header bytes larger than maximum header size",
+            ));
+        }
+        self.header_bytes = header_bytes;
+        Ok(())
+    }
 }
 
 impl<R: RecvBBFrame> BBFrameReceiver for BBFrameRecv<R> {
@@ -369,6 +438,19 @@ impl<R: RecvBBFrame> BBFrameReceiver for BBFrameRecv<R> {
     /// an error in reception.
     fn get_bbframe(&mut self) -> Result<BBFrame> {
         let recv_len = self.recv_bbframe.recv_bbframe(&mut self.buffer)?;
+        if self.header_bytes != 0 {
+            if self.header_bytes > recv_len {
+                log::error!("received a fragment smaller than the header size");
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "BBFRAME is too short",
+                ));
+            }
+            // This could be removed if we allowed the functions below to use an
+            // offset in the buffer to access the BBFRAME.
+            self.buffer.copy_within(self.header_bytes..recv_len, 0);
+        }
+        let recv_len = recv_len - self.header_bytes;
         if recv_len < BBHeader::LEN {
             log::error!("received BBFRAME is too short (length {recv_len})");
             return Err(std::io::Error::new(
@@ -409,10 +491,27 @@ impl<R> BBFrameStream<R> {
             recv_stream,
             buffer: Box::new([0; BBFRAME_MAX_LEN]),
             validator: BBFrameValidator::new(),
+            header_bytes: 0,
         }
     }
 
     impl_set_isi!(BBFrameStream);
+
+    /// Sets the number of bytes used in the header in each BBFRAME.
+    ///
+    /// The function returns an error if `header_bytes` is larger than
+    /// [`HEADER_MAX_LEN`].
+    pub fn set_header_bytes(&mut self, header_bytes: usize) -> Result<()> {
+        if header_bytes > HEADER_MAX_LEN {
+            log::error!("header bytes larger than maximum header size");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "header bytes larger than maximum header size",
+            ));
+        }
+        self.header_bytes = header_bytes;
+        Ok(())
+    }
 }
 
 impl<R: RecvStream> BBFrameReceiver for BBFrameStream<R> {
@@ -423,6 +522,11 @@ impl<R: RecvStream> BBFrameReceiver for BBFrameStream<R> {
     /// BBFRAME, returning an error if the BBFRAME is not valid or if there is
     /// an error in reception.
     fn get_bbframe(&mut self) -> Result<BBFrame> {
+        if self.header_bytes != 0 {
+            // read header (will be discarded)
+            self.recv_stream
+                .recv_stream(&mut self.buffer[..self.header_bytes])?;
+        }
         // read full BBHEADER
         self.recv_stream
             .recv_stream(&mut self.buffer[..BBHeader::LEN])?;
@@ -636,6 +740,25 @@ mod test {
             buff[..SINGLE_FRAGMENT.len()].copy_from_slice(&SINGLE_FRAGMENT);
             Ok(SINGLE_FRAGMENT.len())
         });
+        assert_eq!(
+            defrag.get_bbframe().unwrap(),
+            Bytes::from_static(&SINGLE_FRAGMENT)
+        );
+        assert_eq!(times_called.get(), 1);
+    }
+
+    #[test]
+    fn recv_one_bbframe_with_header() {
+        let header_bytes = 4;
+        let times_called = std::cell::Cell::new(0);
+        let mut defrag = BBFrameRecv::new(|buff: &mut [u8; BBFRAME_MAX_LEN]| {
+            times_called.replace(times_called.get() + 1);
+            buff[..header_bytes].fill(0);
+            let total_len = header_bytes + SINGLE_FRAGMENT.len();
+            buff[header_bytes..total_len].copy_from_slice(&SINGLE_FRAGMENT);
+            Ok(total_len)
+        });
+        defrag.set_header_bytes(header_bytes).unwrap();
         assert_eq!(
             defrag.get_bbframe().unwrap(),
             Bytes::from_static(&SINGLE_FRAGMENT)

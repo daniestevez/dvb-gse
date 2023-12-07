@@ -30,6 +30,9 @@ struct Args {
     /// Input format: "UDP fragments", "UDP complete", or "TCP"
     #[arg(long, default_value_t)]
     input: InputFormat,
+    /// Input header length (the header is discarded)
+    #[arg(long, default_value_t = 0)]
+    header_length: usize,
     /// ISI to process in MIS mode (if this option is not specified, run in SIS mode)
     #[arg(long)]
     isi: Option<u8>,
@@ -159,6 +162,7 @@ pub fn main() -> Result<()> {
                 InputFormat::UdpFragments => {
                     let mut bbframe_recv = BBFrameDefrag::new(socket);
                     bbframe_recv.set_isi(args.isi);
+                    bbframe_recv.set_header_bytes(args.header_length)?;
                     let mut app = AppLoop {
                         bbframe_recv: Some(bbframe_recv),
                         gsepacket_defrag,
@@ -170,6 +174,7 @@ pub fn main() -> Result<()> {
                 InputFormat::UdpComplete => {
                     let mut bbframe_recv = BBFrameRecv::new(socket);
                     bbframe_recv.set_isi(args.isi);
+                    bbframe_recv.set_header_bytes(args.header_length)?;
                     let mut app = AppLoop {
                         bbframe_recv: Some(bbframe_recv),
                         gsepacket_defrag,
@@ -206,6 +211,7 @@ pub fn main() -> Result<()> {
                 }
                 let mut bbframe_recv = BBFrameStream::new(stream);
                 bbframe_recv.set_isi(args.isi);
+                bbframe_recv.set_header_bytes(args.header_length)?;
                 app.bbframe_recv = Some(bbframe_recv);
                 if let Err(err) = app.app_loop() {
                     log::error!("error; waiting for another client: {err:#}");
