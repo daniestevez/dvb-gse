@@ -1,6 +1,6 @@
 [package]
 name = "dvb-gse"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 authors = ["Daniel Estevez <daniel@destevez.net>"]
 description = "DVB-GSE (Digital Video Brodcast Generic Stream Encapsulation)"
@@ -27,7 +27,7 @@ env_logger = { version = "0.10", optional = true }
 lazy_static = "1.4"
 libc = { version = "0.2", optional = true }
 log = "0.4"
-num_enum = "0.6"
+num_enum = "0.7"
 thiserror = "1"
 tun-tap = { version = "0.1", default-features = false, optional = true }
 
