@@ -125,7 +125,6 @@ pub struct GSEPacketDefrag {
     skip_total_length_check: bool,
 }
 
-#[derive(Clone)]
 struct Defrag {
     total_length: usize,
     protocol_type: u16,
