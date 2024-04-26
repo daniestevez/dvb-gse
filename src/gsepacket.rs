@@ -77,7 +77,10 @@ impl GSEPacket {
         Ok(std::iter::from_fn(move || {
             if let Some(packet) = GSEPacket::from_bytes(&remain, label.as_ref()) {
                 log::debug!("extracted GSE Packet with header {}", packet.header());
-                log::trace!("GSE Packet data field {:?}", packet.data());
+                log::trace!(
+                    "GSE Packet data field {}",
+                    faster_hex::hex_string(packet.data())
+                );
                 remain = remain.slice(packet.len()..);
                 if let Some(l) = packet.header.label() {
                     label = Some(l.clone());
