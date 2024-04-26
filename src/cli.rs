@@ -8,13 +8,15 @@
 
 use crate::{
     bbframe::{BBFrameDefrag, BBFrameReceiver, BBFrameRecv, BBFrameStream},
-    gsepacket::GSEPacketDefrag,
+    gsepacket::{GSEPacketDefrag, PDU},
 };
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::{
     net::{SocketAddr, TcpListener, UdpSocket},
     os::unix::io::AsRawFd,
+    sync::mpsc,
+    thread,
 };
 
 /// Receive DVB-GSE and send PDUs into a TUN device
@@ -116,16 +118,22 @@ fn set_reuseaddr(socket: &UdpSocket) -> Result<()> {
 
 #[derive(Debug)]
 struct AppLoop<D> {
-    bbframe_recv: Option<D>,
+    bbframe_recv: D,
     gsepacket_defrag: GSEPacketDefrag,
     tun: tun_tap::Iface,
     bbframe_recv_errors_fatal: bool,
 }
 
+fn write_pdu_tun(pdu: &PDU, tun: &mut tun_tap::Iface) {
+    if let Err(err) = tun.send(pdu.data()) {
+        log::error!("could not write packet to TUN device: {err}");
+    }
+}
+
 impl<D: BBFrameReceiver> AppLoop<D> {
     fn app_loop(&mut self) -> Result<()> {
         loop {
-            let bbframe = match self.bbframe_recv.as_mut().unwrap().get_bbframe() {
+            let bbframe = match self.bbframe_recv.get_bbframe() {
                 Ok(b) => b,
                 Err(err) => {
                     if self.bbframe_recv_errors_fatal {
@@ -136,26 +144,28 @@ impl<D: BBFrameReceiver> AppLoop<D> {
                 }
             };
             // the BBFRAME was validated by bbframe_recv, so we can unwrap here
-            let pdus = self.gsepacket_defrag.defragment(&bbframe).unwrap();
-            for pdu in pdus {
-                if let Err(err) = self.tun.send(pdu.data()) {
-                    log::error!("could not write packet to TUN device: {err}");
-                }
+            for pdu in self.gsepacket_defrag.defragment(&bbframe).unwrap() {
+                write_pdu_tun(&pdu, &mut self.tun);
             }
         }
     }
+}
+
+fn gsepacket_defragmenter(args: &Args) -> GSEPacketDefrag {
+    let mut defrag = GSEPacketDefrag::new();
+    defrag.set_skip_total_length_check(args.skip_total_length);
+    defrag
 }
 
 /// Main function of the CLI application.
 pub fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
-    let tun = tun_tap::Iface::without_packet_info(&args.tun, tun_tap::Mode::Tun)
+    let mut tun = tun_tap::Iface::without_packet_info(&args.tun, tun_tap::Mode::Tun)
         .context("failed to open TUN device")?;
-    let mut gsepacket_defrag = GSEPacketDefrag::new();
-    gsepacket_defrag.set_skip_total_length_check(args.skip_total_length);
     match args.input {
         InputFormat::UdpFragments | InputFormat::UdpComplete => {
+            let gsepacket_defrag = gsepacket_defragmenter(&args);
             let socket = UdpSocket::bind(args.listen).context("failed to bind to UDP socket")?;
             setup_multicast(&socket, &args.listen)?;
             match args.input {
@@ -164,7 +174,7 @@ pub fn main() -> Result<()> {
                     bbframe_recv.set_isi(args.isi);
                     bbframe_recv.set_header_bytes(args.header_length)?;
                     let mut app = AppLoop {
-                        bbframe_recv: Some(bbframe_recv),
+                        bbframe_recv,
                         gsepacket_defrag,
                         tun,
                         bbframe_recv_errors_fatal: true,
@@ -176,7 +186,7 @@ pub fn main() -> Result<()> {
                     bbframe_recv.set_isi(args.isi);
                     bbframe_recv.set_header_bytes(args.header_length)?;
                     let mut app = AppLoop {
-                        bbframe_recv: Some(bbframe_recv),
+                        bbframe_recv,
                         gsepacket_defrag,
                         tun,
                         bbframe_recv_errors_fatal: false,
@@ -189,34 +199,61 @@ pub fn main() -> Result<()> {
         InputFormat::Tcp => {
             let listener =
                 TcpListener::bind(args.listen).context("failed to bind to TCP socket")?;
-            let mut app = AppLoop {
-                bbframe_recv: None,
-                gsepacket_defrag,
-                tun,
-                bbframe_recv_errors_fatal: true,
-            };
-            for stream in listener.incoming() {
-                let stream = match stream {
-                    Ok(s) => s,
-                    Err(e) => {
-                        log::error!("connection error {e}");
-                        continue;
+            // For TCP, the application runs each TCP connection in a dedicated
+            // thread. There is another thread that owns the TUN. The TCP
+            // connection threads are connected to the TUN thread by an mpsc
+            // channel.
+            let channel_capacity = 64;
+            let (tun_tx, tun_rx) = mpsc::sync_channel(channel_capacity);
+            thread::spawn(move || {
+                for pdu in tun_rx.iter() {
+                    write_pdu_tun(&pdu, &mut tun);
+                }
+            });
+            // use thread scope to pass args by reference
+            thread::scope(|s| {
+                for stream in listener.incoming() {
+                    let stream = match stream {
+                        Ok(s) => s,
+                        Err(e) => {
+                            log::error!("connection error {e}");
+                            continue;
+                        }
+                    };
+                    match stream.peer_addr() {
+                        Ok(addr) => log::info!("TCP client connected from {addr}"),
+                        Err(err) => log::error!(
+                            "TCP client connected (but could not retrieve peer address): {err}"
+                        ),
                     }
-                };
-                match stream.peer_addr() {
-                    Ok(addr) => log::info!("TCP client connected from {addr}"),
-                    Err(err) => log::error!(
-                        "TCP client connected (but could not retrieve peer address): {err}"
-                    ),
+                    s.spawn({
+                        let args = &args;
+                        let tun_tx = tun_tx.clone();
+                        move || {
+                            let mut gsepacket_defrag = gsepacket_defragmenter(args);
+                            let mut bbframe_recv = BBFrameStream::new(stream);
+                            bbframe_recv.set_isi(args.isi);
+                            if let Err(err) = bbframe_recv.set_header_bytes(args.header_length) {
+                                eprintln!("could not set header length: {err}");
+                                std::process::exit(1);
+                            }
+                            loop {
+                                let bbframe = match bbframe_recv.get_bbframe() {
+                                    Ok(b) => b,
+                                    Err(err) => {
+                                        log::error!("failed to receive BBFRAME; terminating connection: {err}");
+                                        return;
+                                    }
+                                };
+                                // the BBFRAME was validated by bbframe_recv, so we can unwrap here
+                                for pdu in gsepacket_defrag.defragment(&bbframe).unwrap() {
+                                    tun_tx.send(pdu).unwrap();
+                                }
+                            }
+                        }
+                    });
                 }
-                let mut bbframe_recv = BBFrameStream::new(stream);
-                bbframe_recv.set_isi(args.isi);
-                bbframe_recv.set_header_bytes(args.header_length)?;
-                app.bbframe_recv = Some(bbframe_recv);
-                if let Err(err) = app.app_loop() {
-                    log::error!("error; waiting for another client: {err:#}");
-                }
-            }
+            });
         }
     }
     Ok(())
