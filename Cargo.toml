@@ -24,6 +24,7 @@ bytes = "1.2"
 clap = { version = "4.0", features = ["derive"], optional = true }
 crc = "3.0"
 env_logger = { version = "0.10", optional = true }
+faster-hex = "0.9"
 lazy_static = "1.4"
 libc = { version = "0.2", optional = true }
 log = "0.4"

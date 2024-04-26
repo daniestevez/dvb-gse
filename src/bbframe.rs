@@ -363,7 +363,7 @@ impl<R: RecvFragment> BBFrameReceiver for BBFrameDefrag<R> {
                 self.recv()?;
             }
             let bbframe = Bytes::copy_from_slice(&self.buffer[..bbframe_len]);
-            log::trace!("completed BBFRAME {:?}", bbframe);
+            log::trace!("completed BBFRAME {}", faster_hex::hex_string(&bbframe));
             return Ok(bbframe);
         }
     }
@@ -476,7 +476,7 @@ impl<R: RecvBBFrame> BBFrameReceiver for BBFrameRecv<R> {
             ));
         }
         let bbframe = Bytes::copy_from_slice(&self.buffer[..bbframe_len]);
-        log::trace!("completed BBFRAME {:?}", bbframe);
+        log::trace!("completed BBFRAME {}", faster_hex::hex_string(&bbframe));
         Ok(bbframe)
     }
 }
@@ -548,7 +548,7 @@ impl<R: RecvStream> BBFrameReceiver for BBFrameStream<R> {
         self.recv_stream
             .recv_stream(&mut self.buffer[BBHeader::LEN..bbframe_len])?;
         let bbframe = Bytes::copy_from_slice(&self.buffer[..bbframe_len]);
-        log::trace!("completed BBFRAME {:?}", bbframe);
+        log::trace!("completed BBFRAME {}", faster_hex::hex_string(&bbframe));
         Ok(bbframe)
     }
 }
