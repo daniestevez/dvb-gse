@@ -539,7 +539,8 @@ mod proptests {
                 header.protocol_type();
                 if let Some(label) = header.label() {
                     label.as_slice();
-                    assert_eq!(label.is_empty(), label.len() == 0);
+                    let len = label.len();
+                    assert_eq!(label.is_empty(), len == 0);
                 }
                 assert!(header.len() >= 3);
                 assert!(!header.is_empty());

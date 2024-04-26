@@ -379,7 +379,7 @@ mod proptests {
         fn defrag_garbage(garbage_bbframes in garbage()) {
             let mut defrag = GSEPacketDefrag::new();
             for bbframe in &garbage_bbframes {
-                if let Ok(pdus) = defrag.defragment(&bbframe) {
+                if let Ok(pdus) = defrag.defragment(bbframe) {
                     for pdu in pdus {
                         pdu.data();
                         pdu.protocol_type();

@@ -676,7 +676,7 @@ mod test {
          30 31 32 33 34 35 36 37"
     );
 
-    static MULTIPLE_FRAGMENTS: [&'static [u8]; 3] = [&FRAGMENT0, &FRAGMENT1, &FRAGMENT2];
+    static MULTIPLE_FRAGMENTS: [&[u8]; 3] = [&FRAGMENT0, &FRAGMENT1, &FRAGMENT2];
 
     #[test]
     fn single_fragment_defrag() {
@@ -861,7 +861,7 @@ mod proptests {
             // twice in order to flush a partial BBHEADER left
             // by the garbage.
             assert!(times_called.get() <= garbage_data.len() + 2);
-            if times_called.get() >= garbage_data.len() + 1 {
+            if times_called.get() > garbage_data.len() {
                 assert_eq!(bbframe, Bytes::from_static(&SINGLE_FRAGMENT));
             }
         }
@@ -894,7 +894,7 @@ mod proptests {
             while times_called.get() <= garbage_data.len() {
                 if let Ok(bbframe) = recv.get_bbframe() {
                     assert!(times_called.get() <= garbage_data.len() + 1);
-                    if times_called.get() >= garbage_data.len() + 1 {
+                    if times_called.get() > garbage_data.len() {
                         assert_eq!(bbframe, Bytes::from_static(&SINGLE_FRAGMENT));
                     }
                 }

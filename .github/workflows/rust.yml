@@ -10,13 +10,13 @@ jobs:
     name: Default features
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Format
       run: cargo fmt --all -- --check
     - name: Clippy
-      run: cargo clippy -- -D warnings
+      run: cargo clippy --all-targets -- -D warnings
     - name: Doc
-      run: cargo doc
+      run: RUSTDOCFLAGS="-D warnings" cargo doc
     - name: Build
       run: cargo build --verbose
     - name: Run tests
@@ -26,13 +26,13 @@ jobs:
     name: No features
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Format
       run: cargo fmt --all -- --check
     - name: Clippy
-      run: cargo clippy --no-default-features -- -D warnings
+      run: cargo clippy --all-targets --no-default-features -- -D warnings
     - name: Doc
-      run: cargo doc
+      run: RUSTDOCFLAGS="-D warnings" cargo doc
     - name: Build
       run: cargo build --no-default-features --verbose
     - name: Run tests
