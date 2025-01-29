@@ -41,6 +41,13 @@ impl BBHeader<'_> {
         TsGs::try_from(self.matype1()[..2].load_be::<u8>()).unwrap()
     }
 
+    /// Returns `true` if the BBFRAME is a GSE-HEM BBFRAME.
+    ///
+    /// GSE-HEM BBFRAMEs have a different layout and omit some fields.
+    pub fn is_gse_hem(&self) -> bool {
+        matches!(self.tsgs(), TsGs::GseHem)
+    }
+
     /// Give the value of the SIS/MIS (Single Input Stream or Multiple Input
     /// Stream) field.
     pub fn sismis(&self) -> SisMis {
@@ -84,8 +91,34 @@ impl BBHeader<'_> {
     }
 
     /// Gives the value of the UPL (User Packet Length) field.
-    pub fn upl(&self) -> u16 {
-        u16::from_be_bytes(self.0[2..4].try_into().unwrap())
+    ///
+    /// The function returns `None` if the UPL field is not present, which is
+    /// the case in GSE-HEM mode.
+    pub fn upl(&self) -> Option<u16> {
+        if self.is_gse_hem() {
+            None
+        } else {
+            Some(u16::from_be_bytes(self.0[2..4].try_into().unwrap()))
+        }
+    }
+
+    /// Gives the value of the ISSY field.
+    ///
+    /// The ISSY field is only present in GSE-HEM BBFRAMEs which have the ISSYI
+    /// bit asserted. If the ISSY field is not present, this function returns
+    /// `None`. The ISSY field is split into 2-byte field and a 1-byte field in
+    /// the BBHEADER. These are concatenated into a 3-byte array in the output
+    /// of this function.
+    pub fn issy(&self) -> Option<[u8; 3]> {
+        if self.is_gse_hem() && self.issyi() {
+            let mut field = [0; 3];
+            field[0] = self.0[2];
+            field[1] = self.0[3];
+            field[2] = self.0[6];
+            Some(field)
+        } else {
+            None
+        }
     }
 
     /// Gives the value of the DFL (Data Field Length) field.
@@ -94,8 +127,15 @@ impl BBHeader<'_> {
     }
 
     /// Gives the value of the SYNC (User Packet Sync-byte) field.
-    pub fn sync(&self) -> u8 {
-        self.0[6]
+    ///
+    /// The function returns `None` if the SYNC field is not present, which is
+    /// the case in GSE-HEM mode.
+    pub fn sync(&self) -> Option<u8> {
+        if self.is_gse_hem() {
+            None
+        } else {
+            Some(self.0[6])
+        }
     }
 
     /// Gives the value of the SYNCD field.
@@ -105,12 +145,22 @@ impl BBHeader<'_> {
 
     /// Gives the value of the CRC-8 field.
     pub fn crc8(&self) -> u8 {
-        self.0[9]
+        self.0[BBHeader::LEN - 1]
     }
 
     /// Computes and returns the CRC-8 of the BBHEADER.
     pub fn compute_crc8(&self) -> u8 {
-        CRC8.checksum(&self.0[..9])
+        let crc = CRC8.checksum(&self.0[..BBHeader::LEN - 1]);
+        if self.is_gse_hem() {
+            // ETSI EN 302 307-2 V1.3.1 (2021-07) says that the CRC8_MODE field
+            // in GSE-HEM is the EXOR of the MODE field with CRC-8, and that the
+            // MODE field has the value 1_D.
+            //
+            // To confirm if this indeeds refers to the value 1 in decimal.
+            crc ^ 1
+        } else {
+            crc
+        }
     }
 
     /// Checks if the CRC-8 of the BBHEADER is valid.
@@ -124,8 +174,7 @@ impl Display for BBHeader<'_> {
         write!(
             f,
             "BBHEADER(TS/GS = {}, SIS/MIS = {}, CCM/ACM = {}, ISSYI = {}, \
-		   NPD/GSE-Lite = {}, {}, ISI = {}, UPL = {} bits, DFL = {} bits, \
-		   SYNC = {:#04x}, SYNCD = {:#06x})",
+		   NPD/GSE-Lite = {}, {}, ISI = {}, ",
             self.tsgs(),
             self.sismis(),
             self.ccmacm(),
@@ -133,11 +182,19 @@ impl Display for BBHeader<'_> {
             self.npd(),
             self.rolloff(),
             self.isi(),
-            self.upl(),
-            self.dfl(),
-            self.sync(),
-            self.syncd()
-        )
+        )?;
+        if let Some(upl) = self.upl() {
+            write!(f, "UPL = {} bits, ", upl)?;
+        }
+        if let Some(issy) = self.issy() {
+            let issy = (u32::from(issy[0]) << 16) | (u32::from(issy[1]) << 8) | u32::from(issy[2]);
+            write!(f, "ISSY = {:#06x}, ", issy)?;
+        }
+        write!(f, "DFL = {} bits, ", self.dfl())?;
+        if let Some(sync) = self.sync() {
+            write!(f, "SYNC = {:#04x}, ", sync)?;
+        }
+        write!(f, "SYNCD = {:#06x})", self.syncd())
     }
 }
 
@@ -267,6 +324,8 @@ mod test {
     use hex_literal::hex;
 
     const CONTINUOUS_GSE_HEADER: [u8; 10] = hex!("72 00 00 00 02 f0 00 00 00 15");
+    const GSE_HEM_HEADER: [u8; 10] = hex!("b2 00 00 00 02 f0 00 00 00 87");
+    const GSE_HEM_HEADER_ISSY: [u8; 10] = hex!("ba 00 12 34 02 f0 56 02 11 7c");
 
     #[test]
     fn continuous_gse_header() {
@@ -285,11 +344,66 @@ mod test {
         assert!(!header.gse_lite());
         assert_eq!(header.rolloff(), RollOff::Ro0_20);
         assert_eq!(header.isi(), 0);
-        assert_eq!(header.upl(), 0);
+        assert_eq!(header.issy(), None);
+        assert_eq!(header.upl(), Some(0));
         assert_eq!(header.dfl(), 752);
-        assert_eq!(header.sync(), 0);
+        assert_eq!(header.sync(), Some(0));
         assert_eq!(header.syncd(), 0);
         assert_eq!(header.crc8(), CONTINUOUS_GSE_HEADER[9]);
+        assert_eq!(header.compute_crc8(), header.crc8());
+        assert!(header.crc_is_valid());
+    }
+
+    #[test]
+    fn gse_hem_header() {
+        let header = BBHeader::new(&GSE_HEM_HEADER);
+        assert_eq!(
+            format!("{}", header),
+            "BBHEADER(TS/GS = GSE-HEM, SIS/MIS = single, CCM/ACM = CCM, \
+	     ISSYI = false, NPD/GSE-Lite = false, α = 0.20, ISI = 0, \
+	     DFL = 752 bits, SYNCD = 0x0000)"
+        );
+        assert_eq!(header.tsgs(), TsGs::GseHem);
+        assert_eq!(header.sismis(), SisMis::Sis);
+        assert_eq!(header.ccmacm(), CcmAcm::Ccm);
+        assert!(!header.issyi());
+        assert!(!header.npd());
+        assert!(!header.gse_lite());
+        assert_eq!(header.rolloff(), RollOff::Ro0_20);
+        assert_eq!(header.isi(), 0);
+        assert_eq!(header.issy(), None);
+        assert_eq!(header.upl(), None);
+        assert_eq!(header.dfl(), 752);
+        assert_eq!(header.sync(), None);
+        assert_eq!(header.syncd(), 0);
+        assert_eq!(header.crc8(), GSE_HEM_HEADER[9]);
+        assert_eq!(header.compute_crc8(), header.crc8());
+        assert!(header.crc_is_valid());
+    }
+
+    #[test]
+    fn gse_hem_header_issy() {
+        let header = BBHeader::new(&GSE_HEM_HEADER_ISSY);
+        assert_eq!(
+            format!("{}", header),
+            "BBHEADER(TS/GS = GSE-HEM, SIS/MIS = single, CCM/ACM = CCM, \
+	     ISSYI = true, NPD/GSE-Lite = false, α = 0.20, ISI = 0, \
+	     ISSY = 0x123456, DFL = 752 bits, SYNCD = 0x0211)"
+        );
+        assert_eq!(header.tsgs(), TsGs::GseHem);
+        assert_eq!(header.sismis(), SisMis::Sis);
+        assert_eq!(header.ccmacm(), CcmAcm::Ccm);
+        assert!(header.issyi());
+        assert!(!header.npd());
+        assert!(!header.gse_lite());
+        assert_eq!(header.rolloff(), RollOff::Ro0_20);
+        assert_eq!(header.isi(), 0);
+        assert_eq!(header.issy(), Some([0x12, 0x34, 0x56]));
+        assert_eq!(header.upl(), None);
+        assert_eq!(header.dfl(), 752);
+        assert_eq!(header.sync(), None);
+        assert_eq!(header.syncd(), 0x211);
+        assert_eq!(header.crc8(), GSE_HEM_HEADER_ISSY[9]);
         assert_eq!(header.compute_crc8(), header.crc8());
         assert!(header.crc_is_valid());
     }
