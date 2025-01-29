@@ -112,12 +112,12 @@ impl BBFrameValidator {
     ///
     /// - CRC of the BBHEADER.
     ///
-    /// - TS/GS type matching generic continuous.
+    /// - TS/GS type matching generic continuous or GSE-HEM.
     ///
     /// - SIS/MIS and ISI matching what expected according to the last
     ///   [`BBFrameValidator::set_isi`] call.
     ///
-    /// - ISSYI disabled.
+    /// - If the BBFRAME is not GSE-HEM, then ISSYI disabled.
     ///
     /// - The DFL is a multiple of 8 bits and not larger than the maximum
     ///   BBFRAME length.
@@ -129,9 +129,9 @@ impl BBFrameValidator {
             return false;
         }
         log::trace!("received {} with valid CRC", bbheader);
-        if !matches!(bbheader.tsgs(), TsGs::GenericContinuous) {
+        if !matches!(bbheader.tsgs(), TsGs::GenericContinuous | TsGs::GseHem) {
             log::error!(
-                "unsupported TS/GS type '{}' (only 'Generic continous' is supported)",
+                "unsupported TS/GS type '{}' (only 'Generic continous' and 'GSE-HEM' are supported)",
                 bbheader.tsgs()
             );
             return false;
@@ -154,8 +154,8 @@ impl BBFrameValidator {
                 }
             }
         }
-        if bbheader.issyi() {
-            log::error!("ISSYI unsupported");
+        if !matches!(bbheader.tsgs(), TsGs::GseHem) && bbheader.issyi() {
+            log::error!("ISSYI only supported in GSE-HEM mode");
             return false;
         }
         if bbheader.dfl() % 8 != 0 {
@@ -782,6 +782,12 @@ mod test {
         let mut validator = BBFrameValidator::new();
         assert!(validator.bbheader_is_valid(BBHeader::new(&valid_header)));
 
+        let valid_hem_header = hex!("b2 00 00 00 02 f0 00 00 00 87");
+        assert!(validator.bbheader_is_valid(BBHeader::new(&valid_hem_header)));
+
+        let valid_hem_issy_header = hex!("ba 00 12 34 02 f0 56 02 11 7c");
+        assert!(validator.bbheader_is_valid(BBHeader::new(&valid_hem_issy_header)));
+
         let wrong_crc = hex!("72 00 00 00 02 f0 00 00 00 14");
         assert!(!BBHeader::new(&wrong_crc).crc_is_valid());
         assert!(!validator.bbheader_is_valid(BBHeader::new(&wrong_crc)));
@@ -796,8 +802,6 @@ mod test {
         test_invalid(&validator, &ts_header);
         let packetized_header = hex!("32 00 00 00 02 f0 00 00 00 d7");
         test_invalid(&validator, &packetized_header);
-        let hem_header = hex!("b2 00 00 00 02 f0 00 00 00 86");
-        test_invalid(&validator, &hem_header);
         let mis_header = hex!("52 2a 00 00 02 f0 00 00 00 dc");
         test_invalid(&validator, &mis_header);
         let issyi_header = hex!("7a 00 00 00 02 f0 00 00 00 78");

@@ -8,7 +8,7 @@
 use super::bbframe::BBFrame;
 use super::bbheader::BBHeader;
 use super::gseheader::{GSEHeader, Label};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use crc::Digest;
 use std::collections::HashMap;
 use thiserror::Error;
@@ -28,6 +28,12 @@ pub enum GSEError {
     /// The BBFRAME is shorter than the BBHEADER length.
     #[error("the BBFRAME is shorter than the BBHEADER length")]
     BBFrameShort,
+    /// The SYNCD field of the GSE-HEM BBFRAME is not a multiple of 8 bits.
+    #[error("the SYNCD field of the GSE-HEM BBFRAME is not a multiple of 8 bits")]
+    SyncdNotMultiple,
+    /// The SYNCD field of the GSE-HEM BBFRAME points beyond the end of the BBFRAME.
+    #[error("The SYNCD field of the GSE-HEM BBFRAME points beyond the end of the BBFRAME")]
+    SyncdTooLarge,
 }
 
 lazy_static::lazy_static! {
@@ -45,11 +51,21 @@ impl GSEPacket {
     /// This function returns `None` if the GSE Header cannot be parsed or if
     /// the `bytes` does not fully contain the GSE Packet.
     pub fn from_bytes(bytes: &Bytes, re_used_label: Option<&Label>) -> Option<GSEPacket> {
+        Self::try_from_bytes(bytes, re_used_label, true)
+    }
+
+    fn try_from_bytes(
+        bytes: &Bytes,
+        re_used_label: Option<&Label>,
+        not_contained_is_error: bool,
+    ) -> Option<GSEPacket> {
         let header = GSEHeader::from_slice(bytes, re_used_label)?;
         let header_len = header.len();
         let total_len = 2 + usize::from(header.gse_length());
         if total_len > bytes.len() {
-            log::error!("GSE Packet not fully contained inside bytes");
+            if not_contained_is_error {
+                log::error!("GSE Packet not fully contained inside bytes");
+            }
             return None;
         }
         if total_len < header_len {
@@ -60,22 +76,26 @@ impl GSEPacket {
         Some(GSEPacket { header, data })
     }
 
-    /// Splits a BBFRAME into GSE Packets.
+    /// Splits a [`Bytes`] into GSE Packets.
     ///
     /// This function returns an iterator that returns the GSE Packets contained
-    /// in the BBFRAME. The iterator stops when the end of the BBFRAME is
-    /// reached or when a malformed GSE Packet is found.
-    ///
-    /// The function returns an error if the BBFRAME is malformed. For instance,
-    /// if the BBFRAME length is shorter than the BBHEADER length.
-    pub fn split_bbframe(bbframe: &BBFrame) -> Result<impl Iterator<Item = GSEPacket>, GSEError> {
-        if bbframe.len() < BBHeader::LEN {
-            return Err(GSEError::BBFrameShort);
-        }
-        let mut remain = bbframe.slice(BBHeader::LEN..);
+    /// in the `Bytes`. The first GSE Packet should start at the beginning of
+    /// the `Bytes`. The iterator stops when the end of the `Bytes` is reached,
+    /// or when GSE padding or a malformed GSE Packet is found.
+    pub fn split_bytes(bytes: &Bytes) -> impl Iterator<Item = GSEPacket> {
+        Self::try_split_bytes(bytes, true)
+    }
+
+    fn try_split_bytes(
+        bytes: &Bytes,
+        not_contained_is_error: bool,
+    ) -> impl Iterator<Item = GSEPacket> {
+        let mut remain = bytes.slice(..);
         let mut label = None;
-        Ok(std::iter::from_fn(move || {
-            if let Some(packet) = GSEPacket::from_bytes(&remain, label.as_ref()) {
+        std::iter::from_fn(move || {
+            if let Some(packet) =
+                GSEPacket::try_from_bytes(&remain, label.as_ref(), not_contained_is_error)
+            {
                 log::debug!("extracted GSE Packet with header {}", packet.header());
                 log::trace!(
                     "GSE Packet data field {}",
@@ -90,7 +110,22 @@ impl GSEPacket {
                 log::debug!("no more GSE Packets in BBFRAME");
                 None
             }
-        }))
+        })
+    }
+
+    /// Splits a non-HEM BBFRAME into GSE Packets.
+    ///
+    /// This function returns an iterator that returns the GSE Packets contained
+    /// in the BBFRAME. The iterator stops when the end of the BBFRAME is
+    /// reached, or when GSE padding or a malformed GSE Packet is found.
+    ///
+    /// The function returns an error if the BBFRAME is malformed. For instance,
+    /// if the BBFRAME length is shorter than the BBHEADER length.
+    pub fn split_bbframe(bbframe: &BBFrame) -> Result<impl Iterator<Item = GSEPacket>, GSEError> {
+        if bbframe.len() < BBHeader::LEN {
+            return Err(GSEError::BBFrameShort);
+        }
+        Ok(GSEPacket::split_bytes(&bbframe.slice(BBHeader::LEN..)))
     }
 
     /// Gives the length of the GSE Packet in bytes.
@@ -124,6 +159,17 @@ impl GSEPacket {
 /// full [`PDU`]s.
 #[derive(Debug)]
 pub struct GSEPacketDefrag {
+    defragger: Defragger,
+    // used to store the leftover partial packet at the end of a GSE-HEM BBFRAME
+    hem_leftover: BytesMut,
+    // used for label re-use of the leftover partial packet in GSE-HEM
+    hem_last_label: Option<Label>,
+}
+
+// This intermediate struct is introduce only to avoid borrowing the whole
+// GSEPacketDefrag when calling defrag().
+#[derive(Debug)]
+struct Defragger {
     defrags: HashMap<u8, Defrag>,
     skip_total_length_check: bool,
 }
@@ -176,12 +222,37 @@ impl PDU {
     }
 }
 
+// This is needed because GSEPacketDefrag::defrag can return an iterator of
+// either one of two types, depending on whether the BBFRAME is GSE-HEM or not.
+enum EitherIter<AIterType, BIterType> {
+    A(AIterType),
+    B(BIterType),
+}
+
+impl<AIterType, BIterType> Iterator for EitherIter<AIterType, BIterType>
+where
+    AIterType: Iterator,
+    BIterType: Iterator<Item = AIterType::Item>,
+{
+    type Item = AIterType::Item;
+    fn next(&mut self) -> Option<<Self as Iterator>::Item> {
+        match self {
+            EitherIter::A(it) => it.next(),
+            EitherIter::B(it) => it.next(),
+        }
+    }
+}
+
 impl GSEPacketDefrag {
     /// Creates a new GSE Packet defragmenter.
     pub fn new() -> GSEPacketDefrag {
         GSEPacketDefrag {
-            defrags: HashMap::new(),
-            skip_total_length_check: false,
+            defragger: Defragger {
+                defrags: HashMap::new(),
+                skip_total_length_check: false,
+            },
+            hem_leftover: BytesMut::new(),
+            hem_last_label: None,
         }
     }
 
@@ -194,7 +265,7 @@ impl GSEPacketDefrag {
     /// This function can be used to skip the check of the total length
     /// field.
     pub fn set_skip_total_length_check(&mut self, value: bool) {
-        self.skip_total_length_check = value;
+        self.defragger.skip_total_length_check = value;
     }
 
     /// Defragment a BBFRAME.
@@ -204,13 +275,103 @@ impl GSEPacketDefrag {
     ///
     /// The function returns an error if the BBFRAME is malformed. For instance,
     /// if the BBFRAME length is shorter than the BBHEADER length.
-    pub fn defragment(
-        &mut self,
-        bbframe: &BBFrame,
-    ) -> Result<impl Iterator<Item = PDU> + '_, GSEError> {
-        Ok(GSEPacket::split_bbframe(bbframe)?.flat_map(|packet| self.defrag_packet(&packet)))
+    pub fn defragment<'a>(
+        &'a mut self,
+        bbframe: &'a BBFrame,
+    ) -> Result<impl Iterator<Item = PDU> + 'a, GSEError> {
+        if bbframe.len() < BBHeader::LEN {
+            return Err(GSEError::BBFrameShort);
+        }
+        let bbheader = bbframe[..BBHeader::LEN].try_into().unwrap();
+        let bbheader = BBHeader::new(&bbheader);
+        if bbheader.is_gse_hem() {
+            let syncd_bits = bbheader.syncd();
+            if syncd_bits % 8 != 0 {
+                return Err(GSEError::SyncdNotMultiple);
+            }
+            let syncd_bytes = usize::from(syncd_bits / 8);
+            let remaining_start = BBHeader::LEN + syncd_bytes;
+            if remaining_start >= bbframe.len() {
+                return Err(GSEError::SyncdTooLarge);
+            }
+            let first_packet = match (self.hem_leftover.is_empty(), syncd_bytes == 0) {
+                (true, false) => {
+                    log::warn!(
+                        "GSE-HEM SYNCD is not zero but we have no leftovers from previous BBFRAME"
+                    );
+                    None
+                }
+                (false, true) => {
+                    log::warn!(
+                        "GSE-HEM SYNCD is zero but we have leftovers from previous BBFRAME; \
+                                 dropping leftovers"
+                    );
+                    self.hem_leftover.truncate(0);
+                    None
+                }
+                (true, true) => None,
+                (false, false) => {
+                    self.hem_leftover
+                        .extend_from_slice(&bbframe[BBHeader::LEN..remaining_start]);
+                    let concat = self.hem_leftover.split_off(0).freeze();
+                    let hem_last_label = self.hem_last_label.clone();
+                    GSEPacket::from_bytes(&concat, hem_last_label.as_ref()).and_then(|packet| {
+                        if packet.len() == concat.len() {
+                            Some(packet)
+                        } else {
+                            log::warn!("GSE packet recovered from GSE-HEM leftovers does not match leftovers length; \
+                                        dropping packet");
+                            None
+                        }
+                    })
+                }
+            };
+            let remaining = bbframe.slice(remaining_start..);
+            let remaining_packets = GSEPacket::try_split_bytes(&remaining, false);
+            // use iterator tricks to hook up closures that count the length of
+            // GSE packets and update self.hem_leftover accordingly
+            let remaining_packets = remaining_packets
+                .scan(remaining_start, |end, packet| {
+                    *end += packet.len();
+                    if let Some(l) = packet.header.label() {
+                        self.hem_last_label = Some(l.clone());
+                    }
+                    Some(Some((*end, packet)))
+                })
+                .chain(std::iter::once(None))
+                .scan(remaining_start, |prev_end, packet| {
+                    if let Some((end, packet)) = packet {
+                        *prev_end = end;
+                        Some(packet)
+                    } else {
+                        assert!(self.hem_leftover.is_empty());
+                        self.hem_leftover.extend_from_slice(&bbframe[*prev_end..]);
+                        None
+                    }
+                });
+            Ok(EitherIter::A(
+                first_packet
+                    .into_iter()
+                    .chain(remaining_packets)
+                    .flat_map(|packet| self.defragger.defrag_packet(&packet)),
+            ))
+        } else {
+            if !self.hem_leftover.is_empty() {
+                log::warn!(
+                    "defragmenting non-HEM BBFRAME, but have leftovers from previous HEM BBFRAME; \
+                            dropping leftovers"
+                );
+                self.hem_leftover.truncate(0);
+            }
+            Ok(EitherIter::B(
+                GSEPacket::split_bbframe(bbframe)?
+                    .flat_map(|packet| self.defragger.defrag_packet(&packet)),
+            ))
+        }
     }
+}
 
+impl Defragger {
     fn defrag_packet(&mut self, packet: &GSEPacket) -> Option<PDU> {
         if packet.header().is_single_fragment() {
             log::debug!("defragmented GSE Packet as a single fragment");
@@ -357,6 +518,84 @@ mod test {
         assert_eq!(&pdu.data()[..], &SINGLE_PACKET[20..]);
         assert_eq!(pdu.protocol_type(), 0x0800);
         assert_eq!(pdu.label().as_slice(), hex!("02 00 48 55 4c 4b"));
+    }
+
+    #[test]
+    fn test_hem_defrag_multiple() {
+        // Create some BBFRAMEs containing GSE packets of the same size
+        let dfl_bytes = 400;
+        let packet_size_bytes = 75;
+        let num_packets = 100;
+        // To be filled with SYNCD and CRC-8 ^ MODE
+        let bbheader_template = hex!("ba 00 00 00 0c 80 00 00 00 00");
+        let bbheader = BBHeader::new(&bbheader_template);
+        assert_eq!(usize::from(bbheader.dfl()), dfl_bytes * 8);
+        let packets = (0..num_packets)
+            .map(|n| {
+                // 2 bytes for protocol type (broadcast label for simplicity)
+                let gse_length = packet_size_bytes + 2;
+                let mut packet = Vec::with_capacity(gse_length + 2);
+                packet.push(0xe0);
+                packet.push(u8::try_from(gse_length).unwrap());
+                // dummy protocol type
+                packet.push(0x12);
+                packet.push(0x34);
+                for j in 0..packet_size_bytes {
+                    packet.push((j + n) as u8);
+                }
+                packet
+            })
+            .collect::<Vec<Vec<u8>>>();
+        let mut bbframes = Vec::new();
+        let mut bbframe = BytesMut::new();
+        let mut remain = BytesMut::new();
+        let mut packets_total = 0;
+        let mut packets_in_bbframe = 0;
+        for packet in &packets {
+            if bbframe.is_empty() {
+                let syncd = remain.len() * 8;
+                let mut bbheader = bbheader_template;
+                bbheader[7] = ((syncd >> 8) & 0xff) as u8;
+                bbheader[8] = (syncd & 0xff) as u8;
+                let crc = BBHeader::new(&bbheader).compute_crc8();
+                bbheader[9] = crc;
+                assert!(BBHeader::new(&bbheader).crc_is_valid());
+                bbframe.extend_from_slice(&bbheader);
+                bbframe.extend_from_slice(&remain);
+                packets_in_bbframe = if remain.is_empty() { 0 } else { 1 };
+                remain.truncate(0);
+            }
+            let to_take = (dfl_bytes - (bbframe.len() - BBHeader::LEN)).min(packet.len());
+            bbframe.extend_from_slice(&packet[..to_take]);
+            if to_take < packet.len() {
+                bbframes.push(bbframe.split_off(0).freeze());
+                packets_total += packets_in_bbframe;
+                assert!(remain.is_empty());
+                remain.extend_from_slice(&packet[to_take..]);
+            } else {
+                packets_in_bbframe += 1;
+            }
+        }
+        // Sanity check that the above has generated a reasonable amount of data
+        assert!(packets_total > 75);
+        assert!(bbframes.len() > 10);
+
+        // Defragment the BBFRAMEs
+        let mut defrag = GSEPacketDefrag::new();
+        let mut pdus = Vec::with_capacity(packets_total);
+        for bbframe in &bbframes {
+            for packet in defrag.defragment(bbframe).unwrap() {
+                pdus.push(packet);
+            }
+        }
+        assert_eq!(pdus.len(), packets_total);
+        for (n, pdu) in pdus.iter().enumerate() {
+            let expected = (0..packet_size_bytes)
+                .map(|j| (j + n) as u8)
+                .collect::<Vec<u8>>();
+            assert_eq!(pdu.data(), &expected);
+            assert_eq!(pdu.protocol_type(), 0x1234);
+        }
     }
 }
 
