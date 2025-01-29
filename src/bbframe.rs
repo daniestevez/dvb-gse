@@ -115,12 +115,12 @@ impl BBFrameValidator {
     /// - TS/GS type matching generic continuous.
     ///
     /// - SIS/MIS and ISI matching what expected according to the last
-    /// [`BBFrameValidator::set_isi`] call.
+    ///   [`BBFrameValidator::set_isi`] call.
     ///
     /// - ISSYI disabled.
     ///
     /// - The DFL is a multiple of 8 bits and not larger than the maximum
-    /// BBFRAME length.
+    ///   BBFRAME length.
     ///
     /// If the BBFRAME is not valid, this function logs the reason using
     /// the [`log`] crate.
