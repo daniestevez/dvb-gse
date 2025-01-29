@@ -528,7 +528,7 @@ mod proptests {
         #[test]
         fn random_header(header in proptest::collection::vec(any::<u8>(), 0..=32)) {
             if let Some(header) = GSEHeader::from_slice(&header, None) {
-                format!("{}", header);
+                let _ = format!("{}", header);
                 header.start();
                 header.end();
                 header.is_single_fragment();

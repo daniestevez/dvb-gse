@@ -319,7 +319,7 @@ mod proptests {
             header.crc8();
             header.compute_crc8();
             header.crc_is_valid();
-            format!("{header}");
+            let _ = format!("{header}");
         }
     }
 }
