@@ -6,7 +6,7 @@
 #
 #
 # This test script generates GSE-HEM BBFRAMEs containing IPv6 UDP packets of
-# random sizes and sends the BBFRAMEs in UDP packets to 127.0.0.1:200.
+# random sizes and sends the BBFRAMEs in UDP packets to 127.0.0.1:2000.
 #
 
 import random
