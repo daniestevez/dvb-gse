@@ -203,11 +203,7 @@ pub fn main() -> Result<()> {
     let args = Args::parse();
     let mut tun = tun_tap::Iface::without_packet_info(&args.tun, tun_tap::Mode::Tun)
         .context("failed to open TUN device")?;
-    log::info!(
-        "dvb-gse v{} (git {}) started",
-        env!("CARGO_PKG_VERSION"),
-        git_version::git_version!()
-    );
+    log::info!("dvb-gse v{} started", env!("CARGO_PKG_VERSION"));
     let stats = Arc::new(Mutex::new(Stats::default()));
     if args.stats_interval != 0.0 {
         std::thread::spawn({
