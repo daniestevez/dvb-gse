@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2025-03-13
+
+### Added
+
+- Statistics logging in CLI app.
+
 ## [0.7.0] - 2025-01-29
 
 ### Added
@@ -129,7 +135,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release.
 
-[unreleased]: https://github.com/daniestevez/dvb-gse/compare/v0.7.0...HEAD
+[unreleased]: https://github.com/daniestevez/dvb-gse/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/daniestevez/dvb-gse/compare/v0.7.1...v0.7.1
 [0.7.0]: https://github.com/daniestevez/dvb-gse/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/daniestevez/dvb-gse/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/daniestevez/dvb-gse/compare/v0.6.0...v0.6.1
