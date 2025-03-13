@@ -34,5 +34,5 @@ thiserror = "2"
 tun-tap = { version = "0.1", default-features = false, optional = true }
 
 [dev-dependencies]
-hex-literal = "0.4"
+hex-literal = "1"
 proptest = "1"
