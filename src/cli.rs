@@ -15,8 +15,9 @@ use clap::Parser;
 use std::{
     net::{SocketAddr, TcpListener, UdpSocket},
     os::unix::io::AsRawFd,
-    sync::mpsc,
+    sync::{mpsc, Arc, Mutex},
     thread,
+    time::Duration,
 };
 
 /// Receive DVB-GSE and send PDUs into a TUN device
@@ -38,6 +39,9 @@ struct Args {
     /// ISI to process in MIS mode (if this option is not specified, run in SIS mode)
     #[arg(long)]
     isi: Option<u8>,
+    /// Time interval used to log statistics (in seconds)
+    #[arg(long, default_value_t = 100.0)]
+    stats_interval: f64,
     /// Skip checking the GSE total length field
     #[arg(long)]
     skip_total_length: bool,
@@ -122,20 +126,28 @@ struct AppLoop<D> {
     gsepacket_defrag: GSEPacketDefrag,
     tun: tun_tap::Iface,
     bbframe_recv_errors_fatal: bool,
+    stats: Arc<Mutex<Stats>>,
 }
 
-fn write_pdu_tun(pdu: &PDU, tun: &mut tun_tap::Iface) {
+fn write_pdu_tun(pdu: &PDU, tun: &mut tun_tap::Iface, stats: &mut Stats) {
     if let Err(err) = tun.send(pdu.data()) {
         log::error!("could not write packet to TUN device: {err}");
+        stats.tun_errors += 1;
     }
 }
 
 impl<D: BBFrameReceiver> AppLoop<D> {
     fn app_loop(&mut self) -> Result<()> {
         loop {
-            let bbframe = match self.bbframe_recv.get_bbframe() {
-                Ok(b) => b,
+            let bbframe = self.bbframe_recv.get_bbframe();
+            let mut stats = self.stats.lock().unwrap();
+            let bbframe = match bbframe {
+                Ok(b) => {
+                    stats.bbframes += 1;
+                    b
+                }
                 Err(err) => {
+                    stats.bbframe_errors += 1;
                     if self.bbframe_recv_errors_fatal {
                         return Err(err).context("failed to receive BBFRAME");
                     } else {
@@ -145,8 +157,12 @@ impl<D: BBFrameReceiver> AppLoop<D> {
             };
             // the BBFRAME was validated by bbframe_recv, so we can unwrap here
             for pdu in self.gsepacket_defrag.defragment(&bbframe).unwrap() {
-                write_pdu_tun(&pdu, &mut self.tun);
+                stats.gse_packets += 1;
+                write_pdu_tun(&pdu, &mut self.tun, &mut stats);
             }
+            // drop stats mutex lock explicitly, for good measure in case code
+            // is added below
+            drop(stats);
         }
     }
 }
@@ -157,12 +173,50 @@ fn gsepacket_defragmenter(args: &Args) -> GSEPacketDefrag {
     defrag
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Default)]
+struct Stats {
+    bbframes: u64,
+    bbframe_errors: u64,
+    gse_packets: u64,
+    tun_errors: u64,
+}
+
+fn report_stats(stats: &Mutex<Stats>, interval: Duration) {
+    loop {
+        {
+            let stats = stats.lock().unwrap();
+            log::info!(
+                "BBFRAMES: {}, BBFRAME errors: {}, GSE packets: {}, TUN errors: {}",
+                stats.bbframes,
+                stats.bbframe_errors,
+                stats.gse_packets,
+                stats.tun_errors
+            );
+        }
+        std::thread::sleep(interval);
+    }
+}
+
 /// Main function of the CLI application.
 pub fn main() -> Result<()> {
-    env_logger::init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
     let mut tun = tun_tap::Iface::without_packet_info(&args.tun, tun_tap::Mode::Tun)
         .context("failed to open TUN device")?;
+    log::info!(
+        "dvb-gse v{} (git {}) started",
+        env!("CARGO_PKG_VERSION"),
+        git_version::git_version!()
+    );
+    let stats = Arc::new(Mutex::new(Stats::default()));
+    if args.stats_interval != 0.0 {
+        std::thread::spawn({
+            let stats = Arc::clone(&stats);
+            move || {
+                report_stats(&stats, Duration::from_secs_f64(args.stats_interval));
+            }
+        });
+    }
     match args.input {
         InputFormat::UdpFragments | InputFormat::UdpComplete => {
             let gsepacket_defrag = gsepacket_defragmenter(&args);
@@ -178,6 +232,7 @@ pub fn main() -> Result<()> {
                         gsepacket_defrag,
                         tun,
                         bbframe_recv_errors_fatal: true,
+                        stats,
                     };
                     app.app_loop()?;
                 }
@@ -190,6 +245,7 @@ pub fn main() -> Result<()> {
                         gsepacket_defrag,
                         tun,
                         bbframe_recv_errors_fatal: false,
+                        stats,
                     };
                     app.app_loop()?;
                 }
@@ -205,9 +261,12 @@ pub fn main() -> Result<()> {
             // channel.
             let channel_capacity = 64;
             let (tun_tx, tun_rx) = mpsc::sync_channel(channel_capacity);
-            thread::spawn(move || {
-                for pdu in tun_rx.iter() {
-                    write_pdu_tun(&pdu, &mut tun);
+            thread::spawn({
+                let stats = Arc::clone(&stats);
+                move || {
+                    for pdu in tun_rx.iter() {
+                        write_pdu_tun(&pdu, &mut tun, &mut stats.lock().unwrap());
+                    }
                 }
             });
             // use thread scope to pass args by reference
@@ -229,6 +288,7 @@ pub fn main() -> Result<()> {
                     s.spawn({
                         let args = &args;
                         let tun_tx = tun_tx.clone();
+                        let stats = &stats;
                         move || {
                             let mut gsepacket_defrag = gsepacket_defragmenter(args);
                             let mut bbframe_recv = BBFrameStream::new(stream);
@@ -238,11 +298,19 @@ pub fn main() -> Result<()> {
                                 std::process::exit(1);
                             }
                             loop {
-                                let bbframe = match bbframe_recv.get_bbframe() {
-                                    Ok(b) => b,
-                                    Err(err) => {
-                                        log::error!("failed to receive BBFRAME; terminating connection: {err}");
-                                        return;
+                                let bbframe = bbframe_recv.get_bbframe();
+                                let bbframe = {
+                                    let mut stats = stats.lock().unwrap();
+                                    match bbframe {
+                                        Ok(b) => {
+                                            stats.bbframes += 1;
+                                            b
+                                        }
+                                        Err(err) => {
+                                            log::error!("failed to receive BBFRAME; terminating connection: {err}");
+                                            stats.bbframe_errors += 1;
+                                            return;
+                                        }
                                     }
                                 };
                                 // the BBFRAME was validated by bbframe_recv, so we can unwrap here
