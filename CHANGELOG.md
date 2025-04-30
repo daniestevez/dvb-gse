@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2025-04-30
+
+### Added
+
+- Logging of BBHEADER CRC errors in UDP complete and TCP input modes.
+
 ## [0.7.2] - 2025-03-13
 
 ### Fixed
@@ -141,7 +147,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release.
 
-[unreleased]: https://github.com/daniestevez/dvb-gse/compare/v0.7.2...HEAD
+[unreleased]: https://github.com/daniestevez/dvb-gse/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/daniestevez/dvb-gse/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/daniestevez/dvb-gse/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/daniestevez/dvb-gse/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/daniestevez/dvb-gse/compare/v0.6.2...v0.7.0
