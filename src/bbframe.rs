@@ -86,6 +86,7 @@ pub trait BBFrameReceiver {
 #[derive(Debug, Default)]
 pub struct BBFrameValidator {
     isi: Option<u8>,
+    log_bbheader_crc_errors: bool,
 }
 
 impl BBFrameValidator {
@@ -104,6 +105,18 @@ impl BBFrameValidator {
     /// The default after the construction of the validator is SIS mode.
     pub fn set_isi(&mut self, isi: Option<u8>) {
         self.isi = isi;
+    }
+
+    /// Set the logging of BBHEADER CRC errors.
+    ///
+    /// BBHEADER CRC errors are not logged by default, because [`BBFrameDefrag`]
+    /// relies on checking the CRC of packets at which pontentially there is no
+    /// BBHEADER in order to achieve synchronization, and this would cause
+    /// spurious CRC error logs. For other BBFRAME receivers, logging of
+    /// BBHEADER CRC errors can be enabled by setting `log_bbheader_crc_errors`
+    /// to `true` in this call.
+    pub fn set_log_bbheader_crc_errors(&mut self, log_bbheader_crc_errors: bool) {
+        self.log_bbheader_crc_errors = log_bbheader_crc_errors;
     }
 
     /// Checks if a BBHEADER is valid.
@@ -126,6 +139,9 @@ impl BBFrameValidator {
     /// the [`log`] crate.
     pub fn bbheader_is_valid(&self, bbheader: BBHeader) -> bool {
         if !bbheader.crc_is_valid() {
+            if self.log_bbheader_crc_errors {
+                log::warn!("BBHEADER CRC error");
+            }
             return false;
         }
         log::trace!("received {} with valid CRC", bbheader);
@@ -399,10 +415,12 @@ impl<R> BBFrameRecv<R> {
     /// The `recv_bbframe` object is intended to be an implementor of
     /// [`RecvBBFrame`] that will be used to receive complete BBFRAMEs.
     pub fn new(recv_bbframe: R) -> BBFrameRecv<R> {
+        let mut validator = BBFrameValidator::new();
+        validator.set_log_bbheader_crc_errors(true);
         BBFrameRecv {
             recv_bbframe,
             buffer: Box::new([0; BBFRAME_MAX_LEN]),
-            validator: BBFrameValidator::new(),
+            validator,
             header_bytes: 0,
         }
     }
@@ -487,10 +505,12 @@ impl<R> BBFrameStream<R> {
     /// The `recv_stream` object is intended to be an implementor of
     /// [`RecvStream`] that will be used to receive BBFRAMEs from a stream.
     pub fn new(recv_stream: R) -> BBFrameStream<R> {
+        let mut validator = BBFrameValidator::new();
+        validator.set_log_bbheader_crc_errors(true);
         BBFrameStream {
             recv_stream,
             buffer: Box::new([0; BBFRAME_MAX_LEN]),
-            validator: BBFrameValidator::new(),
+            validator,
             header_bytes: 0,
         }
     }
