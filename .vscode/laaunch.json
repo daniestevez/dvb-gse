@@ -1,5 +1,4 @@
 
-cat > .vscode/launch.json <<EOL
 {
   "version": "0.2.0",
   "configurations": [
@@ -21,4 +20,4 @@ cat > .vscode/launch.json <<EOL
     }
   ]
 }
-EOL
+ 
