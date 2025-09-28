@@ -1,0 +1,24 @@
+
+cat > .vscode/launch.json <<EOL
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug dvb-gse",
+      "type": "lldb",
+      "request": "launch",
+      "program": "/home/ordikhani/Desktop/Debug Mode Dvb-Gse/dvb-gse-main/dvb-gse-main/target/debug/dvb-gse",
+      "args": [
+        "--listen", "0.0.0.0:2000",
+        "--tun", "tun0",
+        "--input", "UDP complete"
+      ],
+      "cwd": "/home/ordikhani/Desktop/Debug Mode Dvb-Gse/dvb-gse-main/dvb-gse-main",
+      "env": {
+        "RUST_LOG": "trace"
+      },
+      "stopOnEntry": false
+    }
+  ]
+}
+EOL
