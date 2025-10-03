@@ -26,7 +26,7 @@ This file should contain a DVB BBFRAME that includes one or more GSE fragments.
 
 Code Variants
 1. Minimal Extraction
-•	File check: Verifies that bbframe.bin exists.
+•	File check: Verifies that sample.bin exists.
 •	Reading: Loads the file into memory using fs::read().
 •	Defragmentation: Passes the data to GSEPacketDefrag.
 •	Output:
