@@ -754,6 +754,46 @@ mod test {
     }
 
     #[test]
+    fn multiple_fragments_defrag_with_header() {
+        let header_bytes = 23;
+        let times_called = std::cell::Cell::new(0);
+        let mut defrag = BBFrameDefrag::new(|buff: &mut [u8]| {
+            let fragment = MULTIPLE_FRAGMENTS[times_called.get()];
+            times_called.replace(times_called.get() + 1);
+            buff[..header_bytes].fill(0xff);
+            buff[header_bytes..header_bytes + fragment.len()].copy_from_slice(fragment);
+            Ok(header_bytes + fragment.len())
+        });
+        defrag.set_header_bytes(header_bytes).unwrap();
+        let mut expected = bytes::BytesMut::new();
+        for fragment in &MULTIPLE_FRAGMENTS {
+            expected.extend_from_slice(fragment);
+        }
+        assert_eq!(defrag.get_bbframe().unwrap(), expected);
+    }
+
+    #[test]
+    fn defrag_header_bytes_too_large() {
+        let mut defrag = BBFrameDefrag::new(|_: &mut [u8]| unimplemented!());
+        assert!(defrag.set_header_bytes(HEADER_MAX_LEN + 1).is_err());
+    }
+
+    #[test]
+    fn defrag_fragment_smaller_than_header() {
+        let header_bytes = 23;
+        let times_called = std::cell::Cell::new(0);
+        let mut defrag = BBFrameDefrag::new(|_: &mut [u8]| {
+            if times_called.get() > 0 {
+                panic!("defrag called too many times");
+            }
+            times_called.replace(times_called.get() + 1);
+            Ok(17)
+        });
+        defrag.set_header_bytes(header_bytes).unwrap();
+        assert!(defrag.get_bbframe().is_err());
+    }
+
+    #[test]
     fn recv_one_bbframe() {
         let times_called = std::cell::Cell::new(0);
         let mut defrag = BBFrameRecv::new(|buff: &mut [u8; BBFRAME_MAX_LEN]| {
@@ -788,9 +828,43 @@ mod test {
     }
 
     #[test]
+    fn recv_header_bytes_too_large() {
+        let mut defrag = BBFrameRecv::new(|_: &mut [u8]| unimplemented!());
+        assert!(defrag.set_header_bytes(HEADER_MAX_LEN + 1).is_err());
+    }
+
+    #[test]
+    fn recv_fragment_smaller_than_header() {
+        let header_bytes = 4;
+        let times_called = std::cell::Cell::new(0);
+        let mut defrag = BBFrameRecv::new(|_: &mut [u8; BBFRAME_MAX_LEN]| {
+            if times_called.get() > 0 {
+                panic!("defrag called too many times");
+            }
+            times_called.replace(times_called.get() + 1);
+            Ok(3)
+        });
+        defrag.set_header_bytes(header_bytes).unwrap();
+        assert!(defrag.get_bbframe().is_err());
+    }
+
+    #[test]
     fn stream_one_bbframe() {
         let stream = &SINGLE_FRAGMENT[..];
         let mut defrag = BBFrameStream::new(stream);
+        assert_eq!(
+            defrag.get_bbframe().unwrap(),
+            Bytes::from_static(&SINGLE_FRAGMENT)
+        );
+    }
+
+    #[test]
+    fn stream_one_bbframe_header() {
+        let header_len = 15;
+        let mut stream = vec![0; header_len + SINGLE_FRAGMENT.len()];
+        stream[header_len..].clone_from_slice(&SINGLE_FRAGMENT);
+        let mut defrag = BBFrameStream::new(&stream[..]);
+        defrag.set_header_bytes(header_len).unwrap();
         assert_eq!(
             defrag.get_bbframe().unwrap(),
             Bytes::from_static(&SINGLE_FRAGMENT)
@@ -843,6 +917,32 @@ mod test {
         assert!(validator.bbheader_is_valid(BBHeader::new(&valid_header)));
         assert!(!validator.bbheader_is_valid(BBHeader::new(&mis_header)));
     }
+
+    #[test]
+    fn udp_socket_recv_fragment() {
+        let mut recv_socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = recv_socket.local_addr().unwrap();
+        let data = (0..100).collect::<Vec<u8>>();
+        let send_socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        send_socket.send_to(&data, addr).unwrap();
+        let mut buf = [0; 256];
+        let len = recv_socket.recv_fragment(&mut buf).unwrap();
+        assert_eq!(len, data.len());
+        assert_eq!(&buf[..len], &data);
+    }
+
+    #[test]
+    fn udp_socket_recv_bbframe() {
+        let mut recv_socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = recv_socket.local_addr().unwrap();
+        let data = (0..100).collect::<Vec<u8>>();
+        let send_socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        send_socket.send_to(&data, addr).unwrap();
+        let mut buf = [0; BBFRAME_MAX_LEN];
+        let len = recv_socket.recv_bbframe(&mut buf).unwrap();
+        assert_eq!(len, data.len());
+        assert_eq!(&buf[..len], &data);
+    }
 }
 
 #[cfg(test)]
@@ -859,7 +959,8 @@ mod proptests {
         /// Supplies garbage fragments from a Vec until all the garbage
         /// fragments are exhausted. Then it supplies a valid single
         /// fragment. The defragmenter must obtain the good frame without
-        /// failing.
+        /// failing. Potentially it could obtain other frames before that if the
+        /// garbage happens to contain valid BBFRAMEs just by chance.
         #[test]
         fn bbframe_defrag_garbage(garbage_data in garbage()) {
             let times_called = std::cell::Cell::new(0);
@@ -879,16 +980,16 @@ mod proptests {
                 buff[..copy_len].copy_from_slice(&fragment[..copy_len]);
                 Ok(fragment.len())
             });
-            let bbframe = defrag.get_bbframe().unwrap();
-            // Sometimes
-            //   times_called.get() == garbage_data.len() + 2
-            // because the SINGLE_FRAGMENT needs to be returned
-            // twice in order to flush a partial BBHEADER left
-            // by the garbage.
-            assert!(times_called.get() <= garbage_data.len() + 2);
-            if times_called.get() > garbage_data.len() {
-                assert_eq!(bbframe, Bytes::from_static(&SINGLE_FRAGMENT));
+            let mut found = false;
+            for _ in 0..(garbage_data.len() + 1) {
+                let bbframe = defrag.get_bbframe().unwrap();
+                if bbframe == Bytes::from_static(&SINGLE_FRAGMENT) {
+                    assert!(times_called.get() > garbage_data.len());
+                    found = true;
+                    break;
+                }
             }
+            assert!(found, "too many BBFRAMEs returned and none of them is SINGLE_FRAGMENT");
         }
     }
 
