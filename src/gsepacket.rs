@@ -82,14 +82,14 @@ impl GSEPacket {
     /// in the `Bytes`. The first GSE Packet should start at the beginning of
     /// the `Bytes`. The iterator stops when the end of the `Bytes` is reached,
     /// or when GSE padding or a malformed GSE Packet is found.
-    pub fn split_bytes(bytes: &Bytes) -> impl Iterator<Item = GSEPacket> {
+    pub fn split_bytes(bytes: &Bytes) -> impl Iterator<Item = GSEPacket> + use<> {
         Self::try_split_bytes(bytes, true)
     }
 
     fn try_split_bytes(
         bytes: &Bytes,
         not_contained_is_error: bool,
-    ) -> impl Iterator<Item = GSEPacket> {
+    ) -> impl Iterator<Item = GSEPacket> + use<> {
         let mut remain = bytes.slice(..);
         let mut label = None;
         std::iter::from_fn(move || {
@@ -121,7 +121,9 @@ impl GSEPacket {
     ///
     /// The function returns an error if the BBFRAME is malformed. For instance,
     /// if the BBFRAME length is shorter than the BBHEADER length.
-    pub fn split_bbframe(bbframe: &BBFrame) -> Result<impl Iterator<Item = GSEPacket>, GSEError> {
+    pub fn split_bbframe(
+        bbframe: &BBFrame,
+    ) -> Result<impl Iterator<Item = GSEPacket> + use<>, GSEError> {
         if bbframe.len() < BBHeader::LEN {
             return Err(GSEError::BBFrameShort);
         }
@@ -275,10 +277,7 @@ impl GSEPacketDefrag {
     ///
     /// The function returns an error if the BBFRAME is malformed. For instance,
     /// if the BBFRAME length is shorter than the BBHEADER length.
-    pub fn defragment<'a>(
-        &'a mut self,
-        bbframe: &'a BBFrame,
-    ) -> Result<impl Iterator<Item = PDU> + 'a, GSEError> {
+    pub fn defragment(&mut self, bbframe: &BBFrame) -> Result<impl Iterator<Item = PDU>, GSEError> {
         if bbframe.len() < BBHeader::LEN {
             return Err(GSEError::BBFrameShort);
         }
@@ -286,7 +285,7 @@ impl GSEPacketDefrag {
         let bbheader = BBHeader::new(&bbheader);
         if bbheader.is_gse_hem() {
             let syncd_bits = bbheader.syncd();
-            if syncd_bits % 8 != 0 {
+            if !syncd_bits.is_multiple_of(8) {
                 return Err(GSEError::SyncdNotMultiple);
             }
             let syncd_bytes = usize::from(syncd_bits / 8);
@@ -388,11 +387,11 @@ impl Defragger {
             log::debug!("pushing non-start GSE fragment ID = {}", frag_id);
             defrag.push(packet);
         }
-        if packet.header.end() {
-            if let Some(defrag) = self.defrags.remove(&frag_id) {
-                log::debug!("end of GSE fragment ID = {}", frag_id);
-                return defrag.reconstruct(frag_id);
-            }
+        if packet.header.end()
+            && let Some(defrag) = self.defrags.remove(&frag_id)
+        {
+            log::debug!("end of GSE fragment ID = {}", frag_id);
+            return defrag.reconstruct(frag_id);
         }
         None
     }

@@ -174,7 +174,7 @@ impl BBFrameValidator {
             log::error!("ISSYI only supported in GSE-HEM mode");
             return false;
         }
-        if bbheader.dfl() % 8 != 0 {
+        if !bbheader.dfl().is_multiple_of(8) {
             log::error!("unsupported data field length not a multiple of 8 bits");
             return false;
         }
@@ -284,7 +284,7 @@ impl<R: Read> RecvStream for R {
 trait BBFrameRecvCommon {
     fn buffer(&self) -> &[u8; BBFRAME_MAX_LEN];
 
-    fn bbheader(&self) -> BBHeader {
+    fn bbheader(&self) -> BBHeader<'_> {
         BBHeader::new(self.buffer()[..BBHeader::LEN].try_into().unwrap())
     }
 }
@@ -939,10 +939,7 @@ mod proptests {
             let fragment = if j < self.garbage_data.len() {
                 &self.garbage_data[j]
             } else {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "no more garbage",
-                ));
+                return Err(std::io::Error::other("no more garbage"));
             };
             let copy_len = fragment.len().min(buff.len());
             buff[..copy_len].copy_from_slice(&fragment[..copy_len]);

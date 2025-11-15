@@ -15,7 +15,7 @@ use clap::Parser;
 use std::{
     net::{SocketAddr, TcpListener, UdpSocket},
     os::unix::io::AsRawFd,
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::Duration,
 };
