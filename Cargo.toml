@@ -35,3 +35,4 @@ tun-tap = { version = "0.1", default-features = false, optional = true }
 [dev-dependencies]
 hex-literal = "1"
 proptest = "1"
+test-log = "0.2.18"

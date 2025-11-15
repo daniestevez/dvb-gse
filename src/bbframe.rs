@@ -577,6 +577,7 @@ impl<R: RecvStream> BBFrameReceiver for BBFrameStream<R> {
 mod test {
     use super::*;
     use hex_literal::hex;
+    use test_log::test;
 
     pub const SINGLE_FRAGMENT: [u8; 104] = hex!(
         "72 00 00 00 02 f0 00 00 00 15 c0 5c 08 00 02 00

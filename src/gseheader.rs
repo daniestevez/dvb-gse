@@ -324,6 +324,7 @@ impl LabelSize {
 mod test {
     use super::*;
     use hex_literal::hex;
+    use test_log::test;
 
     const GSE_HEADER_SINGLE_PACKET: [u8; 10] = hex!("c0 5c 08 00 02 00 48 55 4c 4b");
 

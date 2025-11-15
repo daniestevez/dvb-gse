@@ -322,6 +322,7 @@ impl Display for RollOff {
 mod test {
     use super::*;
     use hex_literal::hex;
+    use test_log::test;
 
     const CONTINUOUS_GSE_HEADER: [u8; 10] = hex!("72 00 00 00 02 f0 00 00 00 15");
     const GSE_HEM_HEADER: [u8; 10] = hex!("b2 00 00 00 02 f0 00 00 00 87");
