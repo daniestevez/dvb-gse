@@ -783,9 +783,7 @@ mod test {
         let header_bytes = 23;
         let times_called = std::cell::Cell::new(0);
         let mut defrag = BBFrameDefrag::new(|_: &mut [u8]| {
-            if times_called.get() > 0 {
-                panic!("defrag called too many times");
-            }
+            assert_eq!(times_called.get(), 0);
             times_called.replace(times_called.get() + 1);
             Ok(17)
         });
@@ -828,6 +826,18 @@ mod test {
     }
 
     #[test]
+    fn recv_bbframe_too_short() {
+        let times_called = std::cell::Cell::new(0);
+        let mut defrag = BBFrameRecv::new(|buff: &mut [u8; BBFRAME_MAX_LEN]| {
+            assert_eq!(times_called.get(), 0);
+            times_called.replace(times_called.get() + 1);
+            buff[..SINGLE_FRAGMENT.len()].copy_from_slice(&SINGLE_FRAGMENT);
+            Ok(20)
+        });
+        assert!(defrag.get_bbframe().is_err());
+    }
+
+    #[test]
     fn recv_header_bytes_too_large() {
         let mut defrag = BBFrameRecv::new(|_: &mut [u8]| unimplemented!());
         assert!(defrag.set_header_bytes(HEADER_MAX_LEN + 1).is_err());
@@ -838,9 +848,7 @@ mod test {
         let header_bytes = 4;
         let times_called = std::cell::Cell::new(0);
         let mut defrag = BBFrameRecv::new(|_: &mut [u8; BBFRAME_MAX_LEN]| {
-            if times_called.get() > 0 {
-                panic!("defrag called too many times");
-            }
+            assert_eq!(times_called.get(), 0);
             times_called.replace(times_called.get() + 1);
             Ok(3)
         });
@@ -869,6 +877,13 @@ mod test {
             defrag.get_bbframe().unwrap(),
             Bytes::from_static(&SINGLE_FRAGMENT)
         );
+    }
+
+    #[test]
+    fn stream_header_bytes_too_large() {
+        let stream: Vec<u8> = Vec::new();
+        let mut defrag = BBFrameStream::new(&stream[..]);
+        assert!(defrag.set_header_bytes(HEADER_MAX_LEN + 1).is_err());
     }
 
     #[test]
