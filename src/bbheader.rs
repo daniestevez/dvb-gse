@@ -27,7 +27,7 @@ impl BBHeader<'_> {
     pub const LEN: usize = 10;
 
     /// Creates a new BBHEADER.
-    pub fn new(data: &[u8; BBHeader::LEN]) -> BBHeader {
+    pub fn new(data: &[u8; BBHeader::LEN]) -> BBHeader<'_> {
         BBHeader(data)
     }
 

@@ -1,7 +1,7 @@
 [package]
 name = "dvb-gse"
 version = "0.7.3"
-edition = "2021"
+edition = "2024"
 authors = ["Daniel Estevez <daniel@destevez.net>"]
 description = "DVB-GSE (Digital Video Brodcast Generic Stream Encapsulation)"
 license = "MIT OR Apache-2.0"

@@ -189,10 +189,10 @@ impl GSEHeader {
         // When the label type is re-use, the GSEHeader struct contains a label,
         // but this was not transmitted over-the-air in the header, so we should
         // not add the length of the label.
-        if !matches!(self.label_type, LabelType::ReUse) {
-            if let Some(label) = &self.label {
-                len += label.len();
-            }
+        if !matches!(self.label_type, LabelType::ReUse)
+            && let Some(label) = &self.label
+        {
+            len += label.len();
         }
         len
     }
