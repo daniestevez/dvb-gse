@@ -496,6 +496,7 @@ impl Default for GSEPacketDefrag {
 mod test {
     use super::*;
     use hex_literal::hex;
+    use test_log::test;
 
     const SINGLE_PACKET: [u8; 104] = hex!(
         "72 00 00 00 02 f0 00 00 00 15 c0 5c 08 00 02 00
