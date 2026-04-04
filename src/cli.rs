@@ -130,6 +130,7 @@ struct AppLoop<D> {
 }
 
 fn write_pdu_tun(pdu: &PDU, tun: &mut tun_tap::Iface, stats: &mut Stats) {
+    stats.gse_packets += 1;
     if let Err(err) = tun.send(pdu.data()) {
         log::error!("could not write packet to TUN device: {err}");
         stats.tun_errors += 1;
@@ -157,7 +158,6 @@ impl<D: BBFrameReceiver> AppLoop<D> {
             };
             // the BBFRAME was validated by bbframe_recv, so we can unwrap here
             for pdu in self.gsepacket_defrag.defragment(&bbframe).unwrap() {
-                stats.gse_packets += 1;
                 write_pdu_tun(&pdu, &mut self.tun, &mut stats);
             }
             // drop stats mutex lock explicitly, for good measure in case code
