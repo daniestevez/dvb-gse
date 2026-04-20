@@ -113,6 +113,15 @@ as server. The following rules need to be followed.
 If an error occurrs or the client closes the connection, the CLI application
 will continue to listen for new clients.
 
+## Label filtering
+
+The `dvb-gse` application supports filtering by GSE label the PDUs that are
+written to the TUN interface. The `--allow-broadcast` and `--allow-label`
+arguments are used to define what labels are allowed. If none of these arguments
+is used, then all GSE PDUs are written to the TUN. If some of these arguments
+are used, then GSE PDUs are dropped by default unless explicitly allowed by one
+of the arguments used.
+
 ## GSE-HEM
 
 GSE-HEM is auto-detected by using the TS/GS field in the BBHEADER (both
