@@ -8,6 +8,7 @@ use super::BitSlice;
 use bitvec::prelude::*;
 use num_enum::TryFromPrimitive;
 use std::fmt::{Display, Formatter};
+use thiserror::Error;
 
 /// GSE Header.
 ///
@@ -235,13 +236,21 @@ impl Display for GSEHeader {
 /// GSE Labels are used for address filtering in the receiver. GSE supports
 /// three kinds of labels: a 6-byte label (as an Ethernet MAC address), a 3-byte
 /// label, and a broadcast label, which is empty.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq)]
 pub struct Label {
     data: [u8; 6],
     size: LabelSize,
 }
 
 impl Label {
+    /// Returns the broadcast (empty) label.
+    pub fn broadcast() -> Label {
+        Label {
+            data: [0; 6],
+            size: LabelSize::Zero,
+        }
+    }
+
     /// Gives a slice containing the label data.
     pub fn as_slice(&self) -> &[u8] {
         &self.data[..self.len()]
@@ -252,11 +261,64 @@ impl Label {
         self.size.len()
     }
 
+    /// Returns `true` if the label is the broadcast (empty) label.
+    pub fn is_broadcast(&self) -> bool {
+        self.is_empty()
+    }
+
     /// Returns `true` if the label has a length of zero bytes.
     ///
     /// This function returns `true` if the label is the broadcast label.
     pub fn is_empty(&self) -> bool {
         matches!(self.size, LabelSize::Zero)
+    }
+
+    /// Parses a 3-byte or 6-byte label given in hex.
+    ///
+    /// The format for the label is either `ab:cd:ef` or `01:23:45:ab:cd:ef`.
+    pub fn from_hex(hex_label: &str) -> Result<Label, LabelParseErr> {
+        let mut data = [0; 6];
+        let mut num_data = 0;
+        for (n, part) in hex_label.split(":").enumerate() {
+            if n >= 6 {
+                // too long
+                return Err(LabelParseErr::WrongHexFormat);
+            }
+            let Ok(x) = u8::from_str_radix(part, 16) else {
+                return Err(LabelParseErr::WrongHexFormat);
+            };
+            data[n] = x;
+            num_data = n;
+        }
+        let size = match num_data + 1 {
+            3 => LabelSize::Size3Bytes,
+            6 => LabelSize::Size6Bytes,
+            _ => return Err(LabelParseErr::WrongHexFormat),
+        };
+        Ok(Label { data, size })
+    }
+}
+
+/// Label parse error.
+#[derive(Error, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum LabelParseErr {
+    /// Wrong hex format for label.
+    #[error("The hex format for the label is wrong")]
+    WrongHexFormat,
+}
+
+impl PartialEq for Label {
+    fn eq(&self, other: &Label) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl std::hash::Hash for Label {
+    fn hash<H>(&self, state: &mut H)
+    where
+        H: std::hash::Hasher,
+    {
+        self.as_slice().hash(state)
     }
 }
 
@@ -517,6 +579,73 @@ mod test {
     #[test]
     fn padding_packet() {
         assert_eq!(GSEHeader::from_slice(&[0; 2], None), None);
+    }
+
+    #[test]
+    fn parse_3byte_label() {
+        assert_eq!(
+            Label::from_hex("01:27:3a").unwrap(),
+            Label {
+                data: [0x01, 0x27, 0x3a, 0x00, 0x00, 0x00],
+                size: LabelSize::Size3Bytes,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_6byte_label() {
+        assert_eq!(
+            Label::from_hex("af:3c:14:59:00:15").unwrap(),
+            Label {
+                data: [0xaf, 0x3c, 0x14, 0x59, 0x00, 0x15],
+                size: LabelSize::Size6Bytes,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_wrong_labels() {
+        assert!(Label::from_hex("foo").is_err());
+        assert!(Label::from_hex("01:00").is_err());
+        assert!(Label::from_hex("01:23:45:67:89:ab:cd").is_err());
+        assert!(Label::from_hex("01:00:02:00").is_err());
+        assert!(Label::from_hex("01273a").is_err());
+        assert!(Label::from_hex("af3c14590015").is_err());
+    }
+
+    #[test]
+    fn broadcast_label() {
+        let label = Label::broadcast();
+        assert!(label.is_broadcast());
+        assert!(label.is_empty());
+    }
+
+    #[test]
+    fn non_broadcast_label() {
+        let label = Label {
+            data: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+            size: LabelSize::Size6Bytes,
+        };
+        assert!(!label.is_broadcast());
+        assert!(!label.is_empty());
+    }
+
+    #[test]
+    fn hash_3bytes_does_not_read_extra_bytes() {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let a = Label {
+            data: [0x01, 0x02, 0x03, 0x00, 0x00, 0x00],
+            size: LabelSize::Size3Bytes,
+        };
+        let b = Label {
+            data: [0x01, 0x02, 0x03, 0xff, 0xff, 0xff],
+            size: LabelSize::Size3Bytes,
+        };
+        let mut s = DefaultHasher::new();
+        let mut t = DefaultHasher::new();
+        a.hash(&mut s);
+        b.hash(&mut t);
+        assert_eq!(s.finish(), t.finish());
     }
 }
 

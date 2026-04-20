@@ -8,6 +8,7 @@
 
 use crate::{
     bbframe::{BBFrameDefrag, BBFrameReceiver, BBFrameRecv, BBFrameStream},
+    gseheader::Label,
     gsepacket::{GSEPacketDefrag, PDU},
 };
 use anyhow::{Context, Result};
@@ -20,31 +21,72 @@ use std::{
     time::Duration,
 };
 
-/// Receive DVB-GSE and send PDUs into a TUN device
+/// Receive DVB-GSE and send PDUs into a TUN device.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// IP address and port to listen on to receive DVB-S2 BBFRAMEs
+    /// IP address and port to listen on to receive DVB-S2 BBFRAMEs.
     #[arg(long)]
     listen: SocketAddr,
-    /// TUN interface name
+    /// TUN interface name.
     #[arg(long)]
     tun: String,
-    /// Input format: "UDP fragments", "UDP complete", or "TCP"
+    /// Input format: "UDP fragments", "UDP complete", or "TCP".
     #[arg(long, default_value_t)]
     input: InputFormat,
-    /// Input header length (the header is discarded)
+    /// Input header length (the header is discarded).
     #[arg(long, default_value_t = 0)]
     header_length: usize,
-    /// ISI to process in MIS mode (if this option is not specified, run in SIS mode)
+    /// ISI to process in MIS mode (if this option is not specified, run in SIS mode).
     #[arg(long)]
     isi: Option<u8>,
-    /// Time interval used to log statistics (in seconds)
+    /// Time interval used to log statistics (in seconds).
     #[arg(long, default_value_t = 100.0)]
     stats_interval: f64,
-    /// Skip checking the GSE total length field
+    /// Skip checking the GSE total length field.
     #[arg(long)]
     skip_total_length: bool,
+    /// Allow GSE packets addressed to the broadcast label (no label).
+    ///
+    /// If this argument is used, all the GSE packets not explicitly allowed via
+    /// CLI arguments are dropped.
+    #[arg(long)]
+    allow_broadcast: bool,
+    /// Allow GSE packets addressed to this 3-byte or 6-byte label.
+    ///
+    /// If this argument is used, all the GSE packets not explicitly allowed via
+    /// CLI arguments are dropped. This argument can be used multiple times to
+    /// allow multiple labels.
+    #[arg(long, value_parser = Label::from_hex)]
+    allow_label: Vec<Label>,
+}
+
+#[derive(Debug, Clone)]
+struct AllowSettings {
+    allow_broadcast: bool,
+    allow_label: Vec<Label>,
+}
+
+impl AllowSettings {
+    fn is_label_allowed(&self, label: &Label) -> bool {
+        if !self.allow_broadcast && self.allow_label.is_empty() {
+            // no 'allow' arguments used; allow everything
+            return true;
+        }
+        if label.is_broadcast() {
+            return self.allow_broadcast;
+        }
+        self.allow_label.iter().any(|allowed| label == allowed)
+    }
+}
+
+impl From<&Args> for AllowSettings {
+    fn from(args: &Args) -> AllowSettings {
+        AllowSettings {
+            allow_broadcast: args.allow_broadcast,
+            allow_label: args.allow_label.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Default)]
@@ -127,10 +169,20 @@ struct AppLoop<D> {
     tun: tun_tap::Iface,
     bbframe_recv_errors_fatal: bool,
     stats: Arc<Mutex<Stats>>,
+    allow_settings: AllowSettings,
 }
 
-fn write_pdu_tun(pdu: &PDU, tun: &mut tun_tap::Iface, stats: &mut Stats) {
+fn write_pdu_tun(
+    pdu: &PDU,
+    tun: &mut tun_tap::Iface,
+    stats: &mut Stats,
+    allow_settings: &AllowSettings,
+) {
     stats.gse_packets += 1;
+    if !allow_settings.is_label_allowed(pdu.label()) {
+        stats.gse_packets_dropped_by_label += 1;
+        return;
+    }
     if let Err(err) = tun.send(pdu.data()) {
         log::error!("could not write packet to TUN device: {err}");
         stats.tun_errors += 1;
@@ -158,7 +210,7 @@ impl<D: BBFrameReceiver> AppLoop<D> {
             };
             // the BBFRAME was validated by bbframe_recv, so we can unwrap here
             for pdu in self.gsepacket_defrag.defragment(&bbframe).unwrap() {
-                write_pdu_tun(&pdu, &mut self.tun, &mut stats);
+                write_pdu_tun(&pdu, &mut self.tun, &mut stats, &self.allow_settings);
             }
             // drop stats mutex lock explicitly, for good measure in case code
             // is added below
@@ -178,6 +230,7 @@ struct Stats {
     bbframes: u64,
     bbframe_errors: u64,
     gse_packets: u64,
+    gse_packets_dropped_by_label: u64,
     tun_errors: u64,
 }
 
@@ -186,10 +239,11 @@ fn report_stats(stats: &Mutex<Stats>, interval: Duration) {
         {
             let stats = stats.lock().unwrap();
             log::info!(
-                "BBFRAMES: {}, BBFRAME errors: {}, GSE packets: {}, TUN errors: {}",
+                "BBFRAMES: {}, BBFRAME errors: {}, GSE packets: {}, GSE packets dropped by label: {}, TUN errors: {}",
                 stats.bbframes,
                 stats.bbframe_errors,
                 stats.gse_packets,
+                stats.gse_packets_dropped_by_label,
                 stats.tun_errors
             );
         }
@@ -218,6 +272,7 @@ pub fn main() -> Result<()> {
             let gsepacket_defrag = gsepacket_defragmenter(&args);
             let socket = UdpSocket::bind(args.listen).context("failed to bind to UDP socket")?;
             setup_multicast(&socket, &args.listen)?;
+            let allow_settings = AllowSettings::from(&args);
             match args.input {
                 InputFormat::UdpFragments => {
                     let mut bbframe_recv = BBFrameDefrag::new(socket);
@@ -229,6 +284,7 @@ pub fn main() -> Result<()> {
                         tun,
                         bbframe_recv_errors_fatal: true,
                         stats,
+                        allow_settings,
                     };
                     app.app_loop()?;
                 }
@@ -242,6 +298,7 @@ pub fn main() -> Result<()> {
                         tun,
                         bbframe_recv_errors_fatal: false,
                         stats,
+                        allow_settings,
                     };
                     app.app_loop()?;
                 }
@@ -257,11 +314,12 @@ pub fn main() -> Result<()> {
             // channel.
             let channel_capacity = 64;
             let (tun_tx, tun_rx) = mpsc::sync_channel(channel_capacity);
+            let allow_settings = AllowSettings::from(&args);
             thread::spawn({
                 let stats = Arc::clone(&stats);
                 move || {
                     for pdu in tun_rx.iter() {
-                        write_pdu_tun(&pdu, &mut tun, &mut stats.lock().unwrap());
+                        write_pdu_tun(&pdu, &mut tun, &mut stats.lock().unwrap(), &allow_settings);
                     }
                 }
             });
