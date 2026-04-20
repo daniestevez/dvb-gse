@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-20
+
+### Added
+
+- CLI arguments to allow/drop GSE PDUs according to label filtering.
+
 ## [0.7.3] - 2025-04-30
 
 ### Added
@@ -147,7 +153,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release.
 
-[unreleased]: https://github.com/daniestevez/dvb-gse/compare/v0.7.3...HEAD
+[unreleased]: https://github.com/daniestevez/dvb-gse/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/daniestevez/dvb-gse/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/daniestevez/dvb-gse/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/daniestevez/dvb-gse/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/daniestevez/dvb-gse/compare/v0.7.0...v0.7.1
