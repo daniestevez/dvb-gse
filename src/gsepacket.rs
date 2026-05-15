@@ -7,7 +7,7 @@
 
 use super::bbframe::BBFrame;
 use super::bbheader::BBHeader;
-use super::gseheader::{GSEHeader, Label};
+use super::gseheader::{GSEHeader, Label, LabelType};
 use bytes::{Bytes, BytesMut};
 use crc::Digest;
 use std::collections::HashMap;
@@ -416,17 +416,24 @@ impl Defrag {
 
     fn push(&mut self, packet: &GSEPacket) {
         self.fragments.push(packet.data().clone());
-        if let Some(total_length) = packet.header().total_length() {
+
+        if packet.header().start() {
+            // the start packet must contain the total length and protocol type fields
+            let total_length = packet.header().total_length().unwrap();
             self.digest.update(&total_length.to_be_bytes());
-        }
-        if let Some(protocol_type) = packet.header().protocol_type() {
+            let protocol_type = packet.header().protocol_type().unwrap();
             self.digest.update(&protocol_type.to_be_bytes());
             self.current_length += std::mem::size_of::<u16>();
+            if !matches!(packet.header().label_type(), LabelType::ReUse) {
+                // if the start packet does not use label re-use, then it must
+                // contain a label (which is perhaps the broadcast label, which
+                // counts as length zero)
+                let label = packet.header().label().unwrap();
+                self.digest.update(label.as_slice());
+                self.current_length += label.len();
+            }
         }
-        if let Some(label) = packet.header().label() {
-            self.digest.update(label.as_slice());
-            self.current_length += label.len();
-        }
+
         if packet.header.end() {
             let data = packet.data();
             let crc_size = std::mem::size_of::<u32>();
@@ -465,7 +472,12 @@ impl Defrag {
         let crc_calc = self.digest.finalize();
         let crc_data = u32::from_be_bytes(data[data.len() - crc_size..].try_into().unwrap());
         if crc_calc != crc_data {
-            log::debug!("invalid CRC-32 for fragment ID = {}", frag_id);
+            log::debug!(
+                "invalid CRC-32 for fragment ID = {} (calculated = 0x{:08x}, in packet = 0x{:08x})",
+                frag_id,
+                crc_calc,
+                crc_data
+            );
             return None;
         }
         log::debug!("valid CRC-32 for fragment ID = {}", frag_id);
@@ -495,9 +507,12 @@ impl Default for GSEPacketDefrag {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::bbframe::BBFrameValidator;
     use hex_literal::hex;
     use test_log::test;
 
+    // This is a BBFRAME that contains a single GSE packet that contains an IPv4
+    // ping packet.
     const SINGLE_PACKET: [u8; 104] = hex!(
         "72 00 00 00 02 f0 00 00 00 15 c0 5c 08 00 02 00
          48 55 4c 4b 45 00 00 54 6f aa 40 00 40 01 72 fc
@@ -508,14 +523,93 @@ mod test {
          30 31 32 33 34 35 36 37"
     );
 
+    // This is a BBFRAME that contains two GSE packets. The first one has a
+    // 6-byte label and cotnains an IPv4 ping packet. The second one has label
+    // re-use and contains another IPv4 ping packet.
+    const TWO_PACKETS_LABEL_REUSE: [u8; 192] = hex!(
+        "72 00 00 00 05 b0 00 00 00 7a c0 5c 08 00 02 00
+         48 55 4c 4b 45 00 00 54 6f aa 40 00 40 01 72 fc
+         2c 00 00 01 2c 00 00 02 08 00 4e 94 00 3b 00 04
+         19 7d 6b 63 00 00 00 00 5d 79 08 00 00 00 00 00
+         10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f
+         20 21 22 23 24 25 26 27 28 29 2a 2b 2c 2d 2e 2f
+         30 31 32 33 34 35 36 37 f0 56 08 00 45 00 00 54
+         6f aa 40 00 40 01 72 fc 2c 00 00 01 2c 00 00 02
+         08 00 4e 93 00 3b 00 05 19 7d 6b 63 00 00 00 00
+         5d 79 08 00 00 00 00 00 10 11 12 13 14 15 16 17
+         18 19 1a 1b 1c 1d 1e 1f 20 21 22 23 24 25 26 27
+         28 29 2a 2b 2c 2d 2e 2f 30 31 32 33 34 35 36 37"
+    );
+
+    const TWO_PDUS_LABEL_REUSE_FRAGMENTED_0: [u8; 155] = hex!(
+        "72 00 00 00 04 88 00 00 00 bc c0 5c 08 00 02 00
+         48 55 4c 4b 45 00 00 54 6f aa 40 00 40 01 72 fc
+         2c 00 00 01 2c 00 00 02 08 00 4e 94 00 3b 00 04
+         19 7d 6b 63 00 00 00 00 5d 79 08 00 00 00 00 00
+         10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f
+         20 21 22 23 24 25 26 27 28 29 2a 2b 2c 2d 2e 2f
+         30 31 32 33 34 35 36 37 b0 31 00 00 56 08 00 45
+         00 00 54 6f aa 40 00 40 01 72 fc 2c 00 00 01 2c
+         00 00 02 08 00 4e 93 00 3b 00 05 19 7d 6b 63 00
+         00 00 00 5d 79 08 00 00 00 00 00"
+    );
+
+    const TWO_PDUS_LABEL_REUSE_FRAGMENTED_1: [u8; 57] = hex!(
+        "72 00 00 00 01 78 00 00 00 16 70 2d 00 10 11 12
+         13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f 20 21 22
+         23 24 25 26 27 28 29 2a 2b 2c 2d 2e 2f 30 31 32
+         33 34 35 36 37 03 a3 4d 2a"
+    );
+
     #[test]
     fn defrag_single_packet() {
+        let validator = BBFrameValidator::new();
         let bbframe = Bytes::copy_from_slice(&SINGLE_PACKET);
+        assert!(validator.bbframe_is_valid(&bbframe));
         let mut defrag = GSEPacketDefrag::new();
         let pdus: Vec<_> = defrag.defragment(&bbframe).unwrap().collect();
         assert_eq!(pdus.len(), 1);
         let pdu = &pdus[0];
         assert_eq!(&pdu.data()[..], &SINGLE_PACKET[20..]);
+        assert_eq!(pdu.protocol_type(), 0x0800);
+        assert_eq!(pdu.label().as_slice(), hex!("02 00 48 55 4c 4b"));
+    }
+
+    #[test]
+    fn defrag_label_reuse() {
+        let validator = BBFrameValidator::new();
+        let bbframe = Bytes::copy_from_slice(&TWO_PACKETS_LABEL_REUSE);
+        assert!(validator.bbframe_is_valid(&bbframe));
+        let mut defrag = GSEPacketDefrag::new();
+        let pdus: Vec<_> = defrag.defragment(&bbframe).unwrap().collect();
+        assert_eq!(pdus.len(), 2);
+        for pdu in &pdus {
+            assert_eq!(pdu.protocol_type(), 0x0800);
+            assert_eq!(pdu.label().as_slice(), hex!("02 00 48 55 4c 4b"));
+        }
+        assert_eq!(&pdus[0].data()[..], &TWO_PACKETS_LABEL_REUSE[20..104]);
+        assert_eq!(&pdus[1].data()[..], &TWO_PACKETS_LABEL_REUSE[108..192]);
+    }
+
+    #[test]
+    fn defrag_label_reuse_fragmented() {
+        let validator = BBFrameValidator::new();
+        let bbframe = Bytes::copy_from_slice(&TWO_PDUS_LABEL_REUSE_FRAGMENTED_0);
+        assert!(validator.bbframe_is_valid(&bbframe));
+        let mut defrag = GSEPacketDefrag::new();
+        let pdus: Vec<_> = defrag.defragment(&bbframe).unwrap().collect();
+        assert_eq!(pdus.len(), 1);
+        let pdu = &pdus[0];
+        assert_eq!(&pdu.data()[..], &TWO_PDUS_LABEL_REUSE_FRAGMENTED_0[20..104]);
+        assert_eq!(pdu.protocol_type(), 0x0800);
+        assert_eq!(pdu.label().as_slice(), hex!("02 00 48 55 4c 4b"));
+
+        let bbframe = Bytes::copy_from_slice(&TWO_PDUS_LABEL_REUSE_FRAGMENTED_1);
+        assert!(validator.bbframe_is_valid(&bbframe));
+        let pdus: Vec<_> = defrag.defragment(&bbframe).unwrap().collect();
+        assert_eq!(pdus.len(), 1);
+        let pdu = &pdus[0];
+        assert_eq!(&pdu.data()[..], &TWO_PACKETS_LABEL_REUSE[108..192]);
         assert_eq!(pdu.protocol_type(), 0x0800);
         assert_eq!(pdu.label().as_slice(), hex!("02 00 48 55 4c 4b"));
     }

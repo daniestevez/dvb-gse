@@ -135,7 +135,7 @@ impl BBFrameValidator {
     /// - The DFL is a multiple of 8 bits and not larger than the maximum
     ///   BBFRAME length.
     ///
-    /// If the BBFRAME is not valid, this function logs the reason using
+    /// If the BBHEADER is not valid, this function logs the reason using
     /// the [`log`] crate.
     pub fn bbheader_is_valid(&self, bbheader: BBHeader) -> bool {
         if !bbheader.crc_is_valid() {
@@ -183,6 +183,27 @@ impl BBFrameValidator {
             return false;
         }
         true
+    }
+
+    /// Checks if a BBFRAME with no padding is valid.
+    ///
+    /// This includes all the checks performed by
+    /// [BBFrameValidator::bbheader_is_valid] plus the check that the length of
+    /// the BBFRAME matches the length indicated by the DFL field in the
+    /// BBHEADER.
+    ///
+    /// If the BBFRAME is not valid, this function logs the reason using the
+    /// [`log`] crate.
+    pub fn bbframe_is_valid(&self, bbframe: &BBFrame) -> bool {
+        let Ok(bbheader) = bbframe[..BBHeader::LEN].try_into() else {
+            log::error!("BBFRAME is shorter than BBHEADER length");
+            return false;
+        };
+        let bbheader = BBHeader::new(bbheader);
+        if !self.bbheader_is_valid(bbheader) {
+            return false;
+        }
+        bbframe.len() - BBHeader::LEN == usize::from(bbheader.dfl() / 8)
     }
 }
 

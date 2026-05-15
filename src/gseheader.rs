@@ -91,7 +91,7 @@ impl GSEHeader {
                 if let Some(label) = re_used_label {
                     Some(label.clone())
                 } else {
-                    log::error!("LT = re-use, but not label to re-use");
+                    log::error!("LT = re-use, but no label to re-use");
                     return None;
                 }
             } else {
