@@ -15,7 +15,7 @@ use std::fmt::{Display, Formatter};
 ///
 /// This struct is used to parse the fields of a BBHEADER. It is simply a
 /// wrapper over an array reference `&[u8; 10]`.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct BBHeader<'a>(&'a [u8; BBHeader::LEN]);
 
 lazy_static::lazy_static! {
