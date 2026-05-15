@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-05-15
+
+### Fixed
+
+- Bug in reassembly of GSE packets that use label re-use in the start packet.
+
+- Renamed GSE packets in stats log message of CLI app to GSE PDUs for better clarity.
+
 ## [0.8.0] - 2026-04-20
 
 ### Added
@@ -153,7 +161,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release.
 
-[unreleased]: https://github.com/daniestevez/dvb-gse/compare/v0.8.0...HEAD
+[unreleased]: https://github.com/daniestevez/dvb-gse/compare/v0.8.1...HEAD
+[0.8.0]: https://github.com/daniestevez/dvb-gse/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/daniestevez/dvb-gse/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/daniestevez/dvb-gse/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/daniestevez/dvb-gse/compare/v0.7.1...v0.7.2
