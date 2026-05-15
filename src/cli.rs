@@ -178,9 +178,9 @@ fn write_pdu_tun(
     stats: &mut Stats,
     allow_settings: &AllowSettings,
 ) {
-    stats.gse_packets += 1;
+    stats.gse_pdus += 1;
     if !allow_settings.is_label_allowed(pdu.label()) {
-        stats.gse_packets_dropped_by_label += 1;
+        stats.gse_pdus_dropped_by_label += 1;
         return;
     }
     if let Err(err) = tun.send(pdu.data()) {
@@ -229,8 +229,8 @@ fn gsepacket_defragmenter(args: &Args) -> GSEPacketDefrag {
 struct Stats {
     bbframes: u64,
     bbframe_errors: u64,
-    gse_packets: u64,
-    gse_packets_dropped_by_label: u64,
+    gse_pdus: u64,
+    gse_pdus_dropped_by_label: u64,
     tun_errors: u64,
 }
 
@@ -239,11 +239,11 @@ fn report_stats(stats: &Mutex<Stats>, interval: Duration) {
         {
             let stats = stats.lock().unwrap();
             log::info!(
-                "BBFRAMES: {}, BBFRAME errors: {}, GSE packets: {}, GSE packets dropped by label: {}, TUN errors: {}",
+                "BBFRAMES: {}, BBFRAME errors: {}, GSE PDUs: {}, GSE PDUs dropped by label: {}, TUN errors: {}",
                 stats.bbframes,
                 stats.bbframe_errors,
-                stats.gse_packets,
-                stats.gse_packets_dropped_by_label,
+                stats.gse_pdus,
+                stats.gse_pdus_dropped_by_label,
                 stats.tun_errors
             );
         }
