@@ -24,3 +24,6 @@ pub mod gsepacket;
 
 #[cfg(feature = "cli")]
 pub mod cli;
+
+#[cfg(feature = "cli")]
+pub mod metrics;
