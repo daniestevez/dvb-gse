@@ -1,6 +1,6 @@
 [package]
 name = "dvb-gse"
-version = "0.8.1"
+version = "0.9.0"
 edition = "2024"
 authors = ["Daniel Estevez <daniel@destevez.net>"]
 description = "DVB-GSE (Digital Video Brodcast Generic Stream Encapsulation)"
@@ -36,3 +36,12 @@ tun-tap = { version = "0.1", default-features = false, optional = true }
 hex-literal = "1"
 proptest = "1"
 test-log = "0.2.18"
+
+[[bin]]
+name = "dvb-gse"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[[example]]
+name = "custom-metrics"
+required-features = ["cli"]
