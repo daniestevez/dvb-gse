@@ -61,6 +61,8 @@ pub struct Args {
     #[arg(long)]
     pub isi: Option<u8>,
     /// Time interval used to log statistics (in seconds).
+    ///
+    /// Zero means that statistics logging is disabled.
     #[arg(long, default_value_t = 100.0)]
     pub stats_interval: f64,
     /// Skip checking the GSE total length field.
@@ -174,15 +176,16 @@ impl<AppArgs: AsRef<Args>, Metrics: MetricsTrait + Clone + Send + 'static> App<A
     ///
     /// This function only returns if there is a fatal error.
     pub fn run(self) -> Result<()> {
+        let stats_interval = Duration::try_from_secs_f64(self.args.as_ref().stats_interval)
+            .context("invalid --stats-interval")?;
         let tun = tun_tap::Iface::without_packet_info(&self.args.as_ref().tun, tun_tap::Mode::Tun)
             .context("failed to open TUN device")?;
         log::info!("dvb-gse v{} started", env!("CARGO_PKG_VERSION"));
-        let stats_interval = self.args.as_ref().stats_interval;
-        if stats_interval != 0.0 {
+        if stats_interval != Duration::ZERO {
             std::thread::spawn({
                 let stats = Arc::clone(&self.metrics.stats);
                 move || {
-                    report_stats(&stats, Duration::from_secs_f64(stats_interval));
+                    report_stats(&stats, stats_interval);
                 }
             });
         }
