@@ -68,6 +68,7 @@ pub struct BBFrameStream<R> {
     buffer: Box<[u8; BBFRAME_MAX_LEN]>,
     validator: BBFrameValidator,
     header_bytes: usize,
+    max_invalid_bbheaders: usize,
 }
 
 /// Receiver of BBFrames.
@@ -105,6 +106,13 @@ impl BBFrameValidator {
     /// The default after the construction of the validator is SIS mode.
     pub fn set_isi(&mut self, isi: Option<u8>) {
         self.isi = isi;
+    }
+
+    /// Returns the ISI (Input Stream Indicator) that is processed.
+    ///
+    /// See [`set_isi`](Self::set_isi).
+    pub fn isi(&self) -> Option<u8> {
+        self.isi
     }
 
     /// Set the logging of BBHEADER CRC errors.
@@ -324,8 +332,8 @@ macro_rules! impl_recv_common {
 
 impl_recv_common!(BBFrameDefrag, BBFrameRecv, BBFrameStream);
 
-macro_rules! impl_set_isi {
-    ($t:ident) => {
+macro_rules! impl_isi {
+    () => {
         /// Set the ISI (Input Stream Indicator) to process.
         ///
         /// When this function is called with `Some(n)`, the BBFRAME receiver
@@ -336,6 +344,38 @@ macro_rules! impl_set_isi {
         /// The default after the construction of the receiver is SIS mode.
         pub fn set_isi(&mut self, isi: Option<u8>) {
             self.validator.set_isi(isi);
+        }
+
+        /// Returns the ISI (Input Stream Indicator) that is processed.
+        ///
+        /// See [`set_isi`](Self::set_isi).
+        pub fn isi(&self) -> Option<u8> {
+            self.validator.isi()
+        }
+    };
+}
+
+macro_rules! impl_header_bytes {
+    () => {
+        /// Sets the number of bytes used in the header in each BBFRAME.
+        ///
+        /// The function returns an error if `header_bytes` is larger than
+        /// [`HEADER_MAX_LEN`].
+        pub fn set_header_bytes(&mut self, header_bytes: usize) -> Result<()> {
+            if header_bytes > HEADER_MAX_LEN {
+                log::error!("header bytes larger than maximum header size");
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "header bytes larger than maximum header size",
+                ));
+            }
+            self.header_bytes = header_bytes;
+            Ok(())
+        }
+
+        /// Returns the number of bytes used in the header in each BBFRAME.
+        pub fn header_bytes(&self) -> usize {
+            self.header_bytes
         }
     };
 }
@@ -355,13 +395,9 @@ impl<R> BBFrameDefrag<R> {
         }
     }
 
-    impl_set_isi!(BBFrameDefrag);
+    impl_isi!();
 
-    /// Sets the number of bytes used in the header in each fragment.
-    ///
-    /// The header is removed before reading the rest of the fragment, which
-    /// should correpond to a BBFRAME fragment. By default, a header length of
-    /// zero bytes is assumed.
+    /// Sets the number of bytes used in the header in each UDP fragment.
     ///
     /// The function returns an error if `header_bytes` is larger than
     /// [`HEADER_MAX_LEN`].
@@ -375,6 +411,11 @@ impl<R> BBFrameDefrag<R> {
         }
         self.header_bytes = header_bytes;
         Ok(())
+    }
+
+    /// Returns the number of bytes used in the header in each UDP fragment.
+    pub fn header_bytes(&self) -> usize {
+        self.header_bytes
     }
 }
 
@@ -446,26 +487,9 @@ impl<R> BBFrameRecv<R> {
         }
     }
 
-    impl_set_isi!(BBFrameRecv);
+    impl_isi!();
 
-    /// Sets the number of bytes used in the header in each BBFRAME.
-    ///
-    /// The header is removed before reading the BBFRAME. By default, a header
-    /// length of zero bytes is assumed.
-    ///
-    /// The function returns an error if `header_bytes` is larger than
-    /// [`HEADER_MAX_LEN`].
-    pub fn set_header_bytes(&mut self, header_bytes: usize) -> Result<()> {
-        if header_bytes > HEADER_MAX_LEN {
-            log::error!("header bytes larger than maximum header size");
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "header bytes larger than maximum header size",
-            ));
-        }
-        self.header_bytes = header_bytes;
-        Ok(())
-    }
+    impl_header_bytes!();
 }
 
 impl<R: RecvBBFrame> BBFrameReceiver for BBFrameRecv<R> {
@@ -525,6 +549,9 @@ impl<R> BBFrameStream<R> {
     ///
     /// The `recv_stream` object is intended to be an implementor of
     /// [`RecvStream`] that will be used to receive BBFRAMEs from a stream.
+    ///
+    /// By default no invalid BBFRAMEs are allowed. This can be changed by
+    /// calling [`set_max_invalid_bbheaders`](Self::set_max_invalid_bbheaders).
     pub fn new(recv_stream: R) -> BBFrameStream<R> {
         let mut validator = BBFrameValidator::new();
         validator.set_log_bbheader_crc_errors(true);
@@ -533,25 +560,36 @@ impl<R> BBFrameStream<R> {
             buffer: Box::new([0; BBFRAME_MAX_LEN]),
             validator,
             header_bytes: 0,
+            max_invalid_bbheaders: 0,
         }
     }
 
-    impl_set_isi!(BBFrameStream);
+    impl_isi!();
 
-    /// Sets the number of bytes used in the header in each BBFRAME.
+    impl_header_bytes!();
+
+    /// Sets the maximum number of consecutive invalid BBHEADERs.
     ///
-    /// The function returns an error if `header_bytes` is larger than
-    /// [`HEADER_MAX_LEN`].
-    pub fn set_header_bytes(&mut self, header_bytes: usize) -> Result<()> {
-        if header_bytes > HEADER_MAX_LEN {
-            log::error!("header bytes larger than maximum header size");
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "header bytes larger than maximum header size",
-            ));
-        }
-        self.header_bytes = header_bytes;
-        Ok(())
+    /// This sets the maximum number of consecutive BBFRAMEs with invalid
+    /// BBHEADER that this object allows while trying to receive a valid BBFRAME
+    /// from the stream. If this maximum number is exceeded, the
+    /// [`get_bbframe`](BBFrameReceiver::get_bbframe) function returns an
+    /// error. Otherwise, invalid BBFRAMEs are discarded until a valid BBFRAME
+    /// is obtained. Once a valid BBFRAME is received, the count of invalid
+    /// BBHEADERs used by this rule is reset to zero.
+    ///
+    /// BBHEADERs whose DFL exceeds the maximum BBFRAME size always result in an
+    /// error immediately, since it is impossible to know where the next BBFRAME
+    /// starts because the DFL cannot be trusted, as it is clearly incorrect.
+    pub fn set_max_invalid_bbheaders(&mut self, max_invalid_bbheaders: usize) {
+        self.max_invalid_bbheaders = max_invalid_bbheaders;
+    }
+
+    /// Returns the maximum number of consecutive invalid BBHEADERs.
+    ///
+    /// See [`set_max_invalid_bbheaders`](Self::set_max_invalid_bbheaders).
+    pub fn max_invalid_bbheaders(&self) -> usize {
+        self.max_invalid_bbheaders
     }
 }
 
@@ -560,37 +598,40 @@ impl<R: RecvStream> BBFrameReceiver for BBFrameStream<R> {
     ///
     /// This function calls the [`RecvStream::recv_stream] method of the
     /// `RecvStream` object owned by the receiver and validates the received
-    /// BBFRAME, returning an error if the BBFRAME is not valid or if there is
-    /// an error in reception.
+    /// BBFRAME, returning an error if a valid BBFRAME cannot be obtained (see
+    /// [`BBFrameStream::set_max_invalid_bbheaders`]).
     fn get_bbframe(&mut self) -> Result<BBFrame> {
-        if self.header_bytes != 0 {
-            // read header (will be discarded)
-            self.recv_stream
-                .recv_stream(&mut self.buffer[..self.header_bytes])?;
-        }
-        // read full BBHEADER
-        self.recv_stream
-            .recv_stream(&mut self.buffer[..BBHeader::LEN])?;
-        if !self.validator.bbheader_is_valid(self.bbheader()) {
-            // BBHeader is invalid, but we try to honor its DFL and read the
-            // data field to recover from the error, unless the DFL is too large
-            let bbframe_len = usize::from(self.bbheader().dfl() / 8) + BBHeader::LEN;
-            if bbframe_len <= BBFRAME_MAX_LEN {
+        for _ in 0..=self.max_invalid_bbheaders {
+            if self.header_bytes != 0 {
+                // read header (will be discarded)
                 self.recv_stream
-                    .recv_stream(&mut self.buffer[BBHeader::LEN..bbframe_len])?;
+                    .recv_stream(&mut self.buffer[..self.header_bytes])?;
             }
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "invalid BBHEADER received",
-            ));
+            // read full BBHEADER
+            self.recv_stream
+                .recv_stream(&mut self.buffer[..BBHeader::LEN])?;
+            let bbframe_len = usize::from(self.bbheader().dfl() / 8) + BBHeader::LEN;
+            if bbframe_len > BBFRAME_MAX_LEN {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "invalid BBHEADER received (DFL is too large)",
+                ));
+            }
+            // read data field
+            self.recv_stream
+                .recv_stream(&mut self.buffer[BBHeader::LEN..bbframe_len])?;
+            if !self.validator.bbheader_is_valid(self.bbheader()) {
+                // loop to try to receive a good BBFRAME if still allowed by the count
+                continue;
+            }
+            let bbframe = Bytes::copy_from_slice(&self.buffer[..bbframe_len]);
+            log::trace!("completed BBFRAME {}", faster_hex::hex_string(&bbframe));
+            return Ok(bbframe);
         }
-        let bbframe_len = usize::from(self.bbheader().dfl() / 8) + BBHeader::LEN;
-        // read data field
-        self.recv_stream
-            .recv_stream(&mut self.buffer[BBHeader::LEN..bbframe_len])?;
-        let bbframe = Bytes::copy_from_slice(&self.buffer[..bbframe_len]);
-        log::trace!("completed BBFRAME {}", faster_hex::hex_string(&bbframe));
-        Ok(bbframe)
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "maximum consecutive invalid BBHEADER count reached",
+        ))
     }
 }
 
@@ -749,7 +790,9 @@ mod test {
             buff[..fragment.len()].copy_from_slice(fragment);
             Ok(fragment.len())
         });
+        assert_eq!(defrag.isi(), None);
         defrag.set_isi(Some(isi));
+        assert_eq!(defrag.isi(), Some(isi));
         assert_eq!(
             defrag.get_bbframe().unwrap(),
             Bytes::from_static(&SINGLE_FRAGMENT_MIS)
@@ -785,7 +828,9 @@ mod test {
             buff[header_bytes..header_bytes + fragment.len()].copy_from_slice(fragment);
             Ok(header_bytes + fragment.len())
         });
+        assert_eq!(defrag.header_bytes(), 0);
         defrag.set_header_bytes(header_bytes).unwrap();
+        assert_eq!(defrag.header_bytes(), header_bytes);
         let mut expected = bytes::BytesMut::new();
         for fragment in &MULTIPLE_FRAGMENTS {
             expected.extend_from_slice(fragment);
@@ -796,6 +841,7 @@ mod test {
     #[test]
     fn defrag_header_bytes_too_large() {
         let mut defrag = BBFrameDefrag::new(|_: &mut [u8]| unimplemented!());
+        assert_eq!(defrag.header_bytes(), 0);
         assert!(defrag.set_header_bytes(HEADER_MAX_LEN + 1).is_err());
     }
 
@@ -808,6 +854,7 @@ mod test {
             times_called.replace(times_called.get() + 1);
             Ok(17)
         });
+        assert_eq!(defrag.header_bytes(), 0);
         defrag.set_header_bytes(header_bytes).unwrap();
         assert!(defrag.get_bbframe().is_err());
     }
@@ -838,7 +885,9 @@ mod test {
             buff[header_bytes..total_len].copy_from_slice(&SINGLE_FRAGMENT);
             Ok(total_len)
         });
+        assert_eq!(defrag.header_bytes(), 0);
         defrag.set_header_bytes(header_bytes).unwrap();
+        assert_eq!(defrag.header_bytes(), header_bytes);
         assert_eq!(
             defrag.get_bbframe().unwrap(),
             Bytes::from_static(&SINGLE_FRAGMENT)
@@ -861,6 +910,7 @@ mod test {
     #[test]
     fn recv_header_bytes_too_large() {
         let mut defrag = BBFrameRecv::new(|_: &mut [u8]| unimplemented!());
+        assert_eq!(defrag.header_bytes(), 0);
         assert!(defrag.set_header_bytes(HEADER_MAX_LEN + 1).is_err());
     }
 
@@ -873,6 +923,7 @@ mod test {
             times_called.replace(times_called.get() + 1);
             Ok(3)
         });
+        assert_eq!(defrag.header_bytes(), 0);
         defrag.set_header_bytes(header_bytes).unwrap();
         assert!(defrag.get_bbframe().is_err());
     }
@@ -893,6 +944,7 @@ mod test {
         let mut stream = vec![0; header_len + SINGLE_FRAGMENT.len()];
         stream[header_len..].clone_from_slice(&SINGLE_FRAGMENT);
         let mut defrag = BBFrameStream::new(&stream[..]);
+        assert_eq!(defrag.header_bytes(), 0);
         defrag.set_header_bytes(header_len).unwrap();
         assert_eq!(
             defrag.get_bbframe().unwrap(),
@@ -904,7 +956,51 @@ mod test {
     fn stream_header_bytes_too_large() {
         let stream: Vec<u8> = Vec::new();
         let mut defrag = BBFrameStream::new(&stream[..]);
+        assert_eq!(defrag.header_bytes(), 0);
         assert!(defrag.set_header_bytes(HEADER_MAX_LEN + 1).is_err());
+    }
+
+    #[test]
+    fn stream_one_invalid_bbheader() {
+        let mut stream = SINGLE_FRAGMENT.to_vec();
+        // modify BBHEADER CRC to make it invalid
+        stream[BBHeader::LEN - 1] = 0;
+        stream.extend_from_slice(&SINGLE_FRAGMENT);
+
+        // using the defaults results in an error
+        let mut defrag = BBFrameStream::new(&stream[..]);
+        assert!(defrag.get_bbframe().is_err());
+
+        // allowing one consecutive invalid BBHEADER we get the second BBFRAME
+        let mut defrag = BBFrameStream::new(&stream[..]);
+        assert_eq!(defrag.max_invalid_bbheaders(), 0);
+        defrag.set_max_invalid_bbheaders(1);
+        assert_eq!(defrag.max_invalid_bbheaders(), 1);
+        assert_eq!(
+            defrag.get_bbframe().unwrap(),
+            Bytes::from_static(&SINGLE_FRAGMENT)
+        );
+    }
+
+    #[test]
+    fn stream_two_invalid_bbheaders() {
+        let mut stream = SINGLE_FRAGMENT.to_vec();
+        // modify BBHEADER CRC to make it invalid
+        stream[BBHeader::LEN - 1] = 0;
+        stream.extend_from_slice(&SINGLE_FRAGMENT);
+        // modify BBHEADER CRC to make it invalid
+        stream[SINGLE_FRAGMENT.len() + BBHeader::LEN - 1] = 1;
+
+        // using the defaults results in an error
+        let mut defrag = BBFrameStream::new(&stream[..]);
+        assert!(defrag.get_bbframe().is_err());
+
+        // allowing one consecutive invalid BBHEADER also results in an error
+        let mut defrag = BBFrameStream::new(&stream[..]);
+        assert_eq!(defrag.max_invalid_bbheaders(), 0);
+        defrag.set_max_invalid_bbheaders(1);
+        assert_eq!(defrag.max_invalid_bbheaders(), 1);
+        assert!(defrag.get_bbframe().is_err());
     }
 
     #[test]
@@ -943,13 +1039,16 @@ mod test {
         test_invalid(&validator, &dfl_too_large);
 
         let isi = 0x2a;
+        assert_eq!(validator.isi(), None);
         validator.set_isi(Some(isi));
+        assert_eq!(validator.isi(), Some(isi));
         assert!(!validator.bbheader_is_valid(BBHeader::new(&valid_header)));
         assert!(validator.bbheader_is_valid(BBHeader::new(&mis_header)));
         let other_isi_header = hex!("52 2b 00 00 02 f0 00 00 00 9f");
         test_invalid(&validator, &other_isi_header);
 
         validator.set_isi(None);
+        assert_eq!(validator.isi(), None);
         assert!(validator.bbheader_is_valid(BBHeader::new(&valid_header)));
         assert!(!validator.bbheader_is_valid(BBHeader::new(&mis_header)));
     }

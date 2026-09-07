@@ -66,6 +66,16 @@ pub struct Args {
     /// Skip checking the GSE total length field.
     #[arg(long)]
     pub skip_total_length: bool,
+    /// Maximum number of consecutive invalid BBHEADERs allowed.
+    ///
+    /// This is only used in TCP input mode. It determines the maximum number of
+    /// invalid BBHEADERs that are allowed in consecutive BBFRAMEs while trying
+    /// to receive a valid BBFRAME from the TCP stream before the TCP connection
+    /// is reset with an error. This rule excludes corrupted BBHEADERs which
+    /// have a DFL that is greater than the maximum BBFRAME size. These always
+    /// result in an error that closes the TCP connection.
+    #[arg(long, default_value_t = 0)]
+    pub max_invalid_bbheaders: usize,
     /// Allow GSE packets addressed to the broadcast label (no label).
     ///
     /// If this argument is used, all the GSE packets not explicitly allowed via
@@ -266,6 +276,7 @@ impl<AppArgs: AsRef<Args>, Metrics: MetricsTrait + Clone + Send + 'static> App<A
                         let mut gsepacket_defrag = gsepacket_defragmenter(args);
                         let mut bbframe_recv = BBFrameStream::new(stream);
                         bbframe_recv.set_isi(args.isi);
+                        bbframe_recv.set_max_invalid_bbheaders(args.max_invalid_bbheaders);
                         if let Err(err) = bbframe_recv.set_header_bytes(args.header_length) {
                             eprintln!("could not set header length: {err}");
                             std::process::exit(1);
