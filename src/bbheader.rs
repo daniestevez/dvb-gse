@@ -156,7 +156,7 @@ impl BBHeader<'_> {
             // in GSE-HEM is the EXOR of the MODE field with CRC-8, and that the
             // MODE field has the value 1_D.
             //
-            // TODO: confirm if this indeeds refers to the value 1 in decimal.
+            // TODO: confirm if this indeed refers to the value 1 in decimal.
             crc ^ 1
         } else {
             crc
