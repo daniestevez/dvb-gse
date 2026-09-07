@@ -18,7 +18,11 @@ use clap::Parser;
 use std::{
     net::{SocketAddr, TcpListener, UdpSocket},
     os::unix::io::AsRawFd,
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, Ordering::Relaxed},
+        mpsc,
+    },
     thread,
     time::Duration,
 };
@@ -78,6 +82,11 @@ pub struct Args {
     /// result in an error that closes the TCP connection.
     #[arg(long, default_value_t = 0)]
     pub max_invalid_bbheaders: usize,
+    /// Maximum number of concurrent TCP clients.
+    ///
+    /// This is only used in TCP input mode.
+    #[arg(long, default_value_t = 16)]
+    pub max_tcp_clients: u32,
     /// Allow GSE packets addressed to the broadcast label (no label).
     ///
     /// If this argument is used, all the GSE packets not explicitly allowed via
@@ -254,8 +263,16 @@ impl<AppArgs: AsRef<Args>, Metrics: MetricsTrait + Clone + Send + 'static> App<A
                 }
             }
         });
+        let clients_available = AtomicU32::new(
+            self.args
+                .as_ref()
+                .max_tcp_clients
+                .checked_add(1)
+                .context("invalid max-tcp-clients")?,
+        );
         // use thread scope to pass args by reference
         thread::scope(|s| {
+            // + 1 here to avoid underflow on fetch_sub
             for stream in listener.incoming() {
                 let stream = match stream {
                     Ok(s) => s,
@@ -270,11 +287,17 @@ impl<AppArgs: AsRef<Args>, Metrics: MetricsTrait + Clone + Send + 'static> App<A
                         "TCP client connected (but could not retrieve peer address): {err}"
                     ),
                 }
+                if clients_available.fetch_sub(1, Relaxed) <= 1 {
+                    log::error!("too many clients already connected");
+                    clients_available.fetch_add(1, Relaxed);
+                    continue;
+                }
                 self.metrics.tcp_client_connected(&stream);
                 s.spawn({
                     let args = self.args.as_ref();
                     let tun_tx = tun_tx.clone();
                     let mut metrics = self.metrics.clone();
+                    let clients_available = &clients_available;
                     move || {
                         let mut gsepacket_defrag = gsepacket_defragmenter(args);
                         let mut bbframe_recv = BBFrameStream::new(stream);
@@ -296,6 +319,7 @@ impl<AppArgs: AsRef<Args>, Metrics: MetricsTrait + Clone + Send + 'static> App<A
                                         log::error!("failed to receive BBFRAME; terminating connection: {err}");
                                         metrics.bbframe_error(&err);
                                         metrics.tcp_client_finished();
+                                        clients_available.fetch_add(1, Relaxed);
                                         return;
                                     }
                                 }
