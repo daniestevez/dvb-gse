@@ -7,7 +7,7 @@
 //! packets to a TUN device.
 
 use crate::{
-    bbframe::{BBFrameDefrag, BBFrameReceiver, BBFrameRecv, BBFrameStream},
+    bbframe::{BBFrameDefrag, BBFrameReceiver, BBFrameRecv, BBFrameStream, HEADER_MAX_LEN},
     gseheader::Label,
     gsepacket::{GSEPacketDefrag, PDU},
     metrics::Metrics as MetricsTrait,
@@ -185,6 +185,11 @@ impl<AppArgs: AsRef<Args>, Metrics: MetricsTrait + Clone + Send + 'static> App<A
     ///
     /// This function only returns if there is a fatal error.
     pub fn run(self) -> Result<()> {
+        anyhow::ensure!(
+            self.args.as_ref().header_length <= HEADER_MAX_LEN,
+            "--header-length is too large (max is {})",
+            HEADER_MAX_LEN
+        );
         let stats_interval = Duration::try_from_secs_f64(self.args.as_ref().stats_interval)
             .context("invalid --stats-interval")?;
         let tun = tun_tap::Iface::without_packet_info(&self.args.as_ref().tun, tun_tap::Mode::Tun)
@@ -214,7 +219,10 @@ impl<AppArgs: AsRef<Args>, Metrics: MetricsTrait + Clone + Send + 'static> App<A
             InputFormat::UdpFragments => {
                 let mut bbframe_recv = BBFrameDefrag::new(socket);
                 bbframe_recv.set_isi(self.args.as_ref().isi);
-                bbframe_recv.set_header_bytes(self.args.as_ref().header_length)?;
+                // the header_length was validated above
+                bbframe_recv
+                    .set_header_bytes(self.args.as_ref().header_length)
+                    .unwrap();
                 let mut app = AppLoop {
                     bbframe_recv,
                     gsepacket_defrag,
@@ -228,7 +236,10 @@ impl<AppArgs: AsRef<Args>, Metrics: MetricsTrait + Clone + Send + 'static> App<A
             InputFormat::UdpComplete => {
                 let mut bbframe_recv = BBFrameRecv::new(socket);
                 bbframe_recv.set_isi(self.args.as_ref().isi);
-                bbframe_recv.set_header_bytes(self.args.as_ref().header_length)?;
+                // the header_length was validated above
+                bbframe_recv
+                    .set_header_bytes(self.args.as_ref().header_length)
+                    .unwrap();
                 let mut app = AppLoop {
                     bbframe_recv,
                     gsepacket_defrag,
@@ -303,10 +314,8 @@ impl<AppArgs: AsRef<Args>, Metrics: MetricsTrait + Clone + Send + 'static> App<A
                         let mut bbframe_recv = BBFrameStream::new(stream);
                         bbframe_recv.set_isi(args.isi);
                         bbframe_recv.set_max_invalid_bbheaders(args.max_invalid_bbheaders);
-                        if let Err(err) = bbframe_recv.set_header_bytes(args.header_length) {
-                            eprintln!("could not set header length: {err}");
-                            std::process::exit(1);
-                        }
+                        // the header length was validated above
+                        bbframe_recv.set_header_bytes(args.header_length).unwrap();
                         loop {
                             let bbframe = bbframe_recv.get_bbframe();
                             let bbframe = {
