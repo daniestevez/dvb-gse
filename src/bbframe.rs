@@ -433,7 +433,7 @@ impl<R> BBFrameDefrag<R> {
         Ok(())
     }
 
-    /// Returns the number of bytes used in the header in each UDP fragment.
+    /// Returns the number of bytes used in the header in each fragment.
     pub fn header_bytes(&self) -> usize {
         self.header_bytes
     }
@@ -486,6 +486,9 @@ impl<R: RecvFragment> BBFrameDefrag<R> {
                 self.occupied_bytes,
             );
         }
+        if n == 0 {
+            log::warn!("received zero-sized fragment");
+        }
         self.occupied_bytes += n - self.header_bytes;
         Ok(())
     }
@@ -523,7 +526,7 @@ impl<R: RecvBBFrame> BBFrameReceiver for BBFrameRecv<R> {
         let recv_len = self.recv_bbframe.recv_bbframe(&mut self.buffer)?;
         if self.header_bytes != 0 {
             if self.header_bytes > recv_len {
-                log::error!("received a fragment smaller than the header size");
+                log::error!("received a BBFRAME smaller than the header size");
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "BBFRAME is too short",
