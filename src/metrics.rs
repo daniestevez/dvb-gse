@@ -13,6 +13,12 @@ use bytes::Bytes;
 /// dvb-gse processing. By default, all the methods do nothing. Trait
 /// implementors can override some or all of these methods to update and report
 /// metrics.
+///
+/// Metrics objects are cloned in some situations. For instance the CLI
+/// application in [`cli`](crate::cli) clones the metrics object for each TCP
+/// connection that is handled. Therefore, it is generally expected that cloning
+/// a metrics object results in an object that shares the same state, via
+/// atomics or mutexes.
 pub trait Metrics {
     /// This function is called when a BBFRAME is successfully received.
     ///

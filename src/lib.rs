@@ -7,7 +7,7 @@
 //! in UDP or TCP packets from a DVB-S2 receiver (such as
 //! [Longmynd](https://github.com/BritishAmateurTelevisionClub/longmynd) or
 //! commercial receivers supporting BBFRAME output), obtains IP packets from a
-//! continous-mode GSE stream or a GSE-HEM stream, and sends the IP packets to a
+//! continuous-mode GSE stream or a GSE-HEM stream, and sends the IP packets to a
 //! TUN device.
 //!
 //! The crate can also be used as a library to process GSE Packets and

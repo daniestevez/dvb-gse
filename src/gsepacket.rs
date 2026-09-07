@@ -45,7 +45,7 @@ impl GSEPacket {
     /// [`Bytes`].
     ///
     /// The GSE Header at the beginning of `bytes` is parsed and used to
-    /// determine the length of the GSE Packet. On success,the GSE Packet is
+    /// determine the length of the GSE Packet. On success, the GSE Packet is
     /// returned.
     ///
     /// This function returns `None` if the GSE Header cannot be parsed or if
@@ -136,7 +136,7 @@ impl GSEPacket {
 
     /// Returns `true` if the GSE Packet has a length of zero bytes.
     ///
-    /// This always returns `false`, since a GSE Header never has a length of
+    /// This always returns `false`, since a GSE Packet never has a length of
     /// zero bytes. This function exists because objects that implement a `len`
     /// method should also implement an `is_empty` method.
     pub fn is_empty(&self) -> bool {
@@ -167,7 +167,7 @@ pub struct GSEPacketDefrag {
     hem_last_label: Option<Label>,
 }
 
-// This intermediate struct is introduce only to avoid borrowing the whole
+// This intermediate struct is introduced only to avoid borrowing the whole
 // GSEPacketDefrag when calling defrag().
 #[derive(Debug)]
 struct Defragger {
@@ -189,7 +189,7 @@ struct Defrag {
 
 /// PDU.
 ///
-/// This structure represents a PDU. It carriers the PDU data, and its
+/// This structure represents a PDU. It carries the PDU data, and its
 /// corresponding metadata (the protocol type and the label).
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct PDU {
@@ -303,7 +303,8 @@ impl GSEPacketDefrag {
     /// Defragment a BBFRAME.
     ///
     /// This function returns an iterator that produces all the PDUs that can be
-    /// completed with the GSE Packets found in the BBFRAME.
+    /// completed with the GSE Packets found in the BBFRAME. The iterator must
+    /// be fully consumed before calling `defragment` again.
     ///
     /// The function returns an error if the BBFRAME is malformed. For instance,
     /// if the BBFRAME length is shorter than the BBHEADER length.
@@ -443,7 +444,12 @@ impl Defragger {
             let mut defrag = Defrag::new(packet.header()).unwrap();
             defrag.set_skip_total_length_check(self.skip_total_length_check);
             defrag.push(packet);
-            self.defrags.insert(frag_id, defrag);
+            let was_present = self.defrags.insert(frag_id, defrag).is_some();
+            if was_present {
+                log::debug!(
+                    "start GSE fragment clears in-progress defragmentation for same fragment ID"
+                );
+            }
         } else if let Some(defrag) = self.defrags.get_mut(&frag_id) {
             log::debug!("pushing non-start GSE fragment ID = {}", frag_id);
             defrag.push(packet);
@@ -610,7 +616,7 @@ mod test {
     );
 
     // This is a BBFRAME that contains two GSE packets. The first one has a
-    // 6-byte label and cotnains an IPv4 ping packet. The second one has label
+    // 6-byte label and contains an IPv4 ping packet. The second one has label
     // re-use and contains another IPv4 ping packet.
     const TWO_PACKETS_LABEL_REUSE: [u8; 192] = hex!(
         "72 00 00 00 05 b0 00 00 00 7a c0 5c 08 00 02 00

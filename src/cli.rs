@@ -3,7 +3,7 @@
 //! This module implements a CLI application that receives UDP or TCP packets
 //! containing BBFRAMEs from an external DVB-S2 receiver such as
 //! [`Longmynd`](https://github.com/BritishAmateurTelevisionClub/longmynd). It
-//! obtains IP packets from a continous-mode GSE stream, and sends the IP
+//! obtains IP packets from a continuous-mode GSE stream, and sends the IP
 //! packets to a TUN device.
 
 use crate::{
