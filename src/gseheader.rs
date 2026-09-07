@@ -285,6 +285,13 @@ impl Label {
                 // too long
                 return Err(LabelParseErr::WrongHexFormat);
             }
+            if part.len() != 2 {
+                return Err(LabelParseErr::WrongHexFormat);
+            }
+            // from_str_radix allows a leading '+', but we don't
+            if part.chars().any(|c| !c.is_ascii_hexdigit()) {
+                return Err(LabelParseErr::WrongHexFormat);
+            }
             let Ok(x) = u8::from_str_radix(part, 16) else {
                 return Err(LabelParseErr::WrongHexFormat);
             };
@@ -612,6 +619,10 @@ mod test {
         assert!(Label::from_hex("01:00:02:00").is_err());
         assert!(Label::from_hex("01273a").is_err());
         assert!(Label::from_hex("af3c14590015").is_err());
+        assert!(Label::from_hex("00:00:1").is_err());
+        assert!(Label::from_hex("00:00:+1").is_err());
+        assert!(Label::from_hex("00:00:1 ").is_err());
+        assert!(Label::from_hex("00:00: 1").is_err());
     }
 
     #[test]
