@@ -37,7 +37,7 @@ jobs:
     - name: Clippy
       run: cargo clippy --all-targets --no-default-features -- -D warnings
     - name: Doc
-      run: RUSTDOCFLAGS="-D warnings" cargo doc
+      run: RUSTDOCFLAGS="-D warnings" cargo doc --no-default-features
     - name: Build
       run: cargo build --no-default-features --verbose
     - name: Run tests

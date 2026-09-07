@@ -100,7 +100,7 @@ impl BBFrameValidator {
     ///
     /// When this function is called with `Some(n)`, the validator will expect
     /// an MIS (Multiple Input Stream) signal and only declare as valid BBFRAMEs
-    /// from the the indicated ISI. When this function is called with `None`,
+    /// from the indicated ISI. When this function is called with `None`,
     /// the validator will expect a SIS (Single Input Stream) signal.
     ///
     /// The default after the construction of the validator is SIS mode.
@@ -118,7 +118,7 @@ impl BBFrameValidator {
     /// Set the logging of BBHEADER CRC errors.
     ///
     /// BBHEADER CRC errors are not logged by default, because [`BBFrameDefrag`]
-    /// relies on checking the CRC of packets at which pontentially there is no
+    /// relies on checking the CRC of packets at which potentially there is no
     /// BBHEADER in order to achieve synchronization, and this would cause
     /// spurious CRC error logs. For other BBFRAME receivers, logging of
     /// BBHEADER CRC errors can be enabled by setting `log_bbheader_crc_errors`
@@ -155,7 +155,7 @@ impl BBFrameValidator {
         log::trace!("received {} with valid CRC", bbheader);
         if !matches!(bbheader.tsgs(), TsGs::GenericContinuous | TsGs::GseHem) {
             log::error!(
-                "unsupported TS/GS type '{}' (only 'Generic continous' and 'GSE-HEM' are supported)",
+                "unsupported TS/GS type '{}' (only 'Generic continuous' and 'GSE-HEM' are supported)",
                 bbheader.tsgs()
             );
             return false;
@@ -277,12 +277,12 @@ where
 /// This trait is modeled around [`UdpSocket::recv_from`], since the main way to
 /// receive complete BBFRAMEs is as jumbo datagrams received from a UDP socket.
 ///
-/// The BBFRAMEs may or may not have padding at the end. The `recv_fragment`
-/// function is allowed to skip suppyling some complete BBFRAMEs, which happens
+/// The BBFRAMEs may or may not have padding at the end. The `recv_bbframe`
+/// function is allowed to skip supplying some complete BBFRAMEs, which happens
 /// for instance if UDP packets are lost (when this trait is implemented by a
 /// UDP socket).
 pub trait RecvBBFrame {
-    /// Receives a single fragment into the buffer. On success, returns the
+    /// Receives a single BBFRAME into the buffer. On success, returns the
     /// number of bytes read.
     ///
     /// The function is called with a byte array `buf` of sufficient
@@ -313,7 +313,7 @@ where
 /// The BBFRAMEs cannot have padding at the end (the length of the BBFRAME must
 /// be equal to the DFL plus the BBHEADER). They need to be present back-to-back
 /// in the stream.  The stream is allowed to skip supplying some complete
-/// BBFRAMEs (this may happened with a TCP stream if BBFRAMEs overflow a buffer
+/// BBFRAMEs (this may happen with a TCP stream if BBFRAMEs overflow a buffer
 /// before being written to the TCP socket).
 pub trait RecvStream {
     /// Reads the exact number of bytes required to fill `buf`.
@@ -377,6 +377,8 @@ macro_rules! impl_header_bytes {
         ///
         /// The function returns an error if `header_bytes` is larger than
         /// [`HEADER_MAX_LEN`].
+        ///
+        /// By default, a header length of zero bytes is assumed.
         pub fn set_header_bytes(&mut self, header_bytes: usize) -> Result<()> {
             if header_bytes > HEADER_MAX_LEN {
                 log::error!("header bytes larger than maximum header size");
@@ -413,10 +415,12 @@ impl<R> BBFrameDefrag<R> {
 
     impl_isi!();
 
-    /// Sets the number of bytes used in the header in each UDP fragment.
+    /// Sets the number of bytes used in the header in each fragment.
     ///
     /// The function returns an error if `header_bytes` is larger than
     /// [`HEADER_MAX_LEN`].
+    ///
+    /// By default a header size of zero bytes is assumed.
     pub fn set_header_bytes(&mut self, header_bytes: usize) -> Result<()> {
         if header_bytes > HEADER_MAX_LEN {
             log::error!("header bytes larger than maximum header size");
@@ -612,7 +616,7 @@ impl<R> BBFrameStream<R> {
 impl<R: RecvStream> BBFrameReceiver for BBFrameStream<R> {
     /// Get and return a new validated BBFRAME.
     ///
-    /// This function calls the [`RecvStream::recv_stream] method of the
+    /// This function calls the [`RecvStream::recv_stream`] method of the
     /// `RecvStream` object owned by the receiver and validates the received
     /// BBFRAME, returning an error if a valid BBFRAME cannot be obtained (see
     /// [`BBFrameStream::set_max_invalid_bbheaders`]).

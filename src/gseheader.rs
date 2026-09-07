@@ -36,7 +36,8 @@ impl GSEHeader {
     /// of the slice, in addition to its length.
     ///
     /// Additionally, `None` is returned if the header corresponds to padding
-    /// bytes (i.e., if the contents of its fixed fields are all zero).
+    /// bytes (i.e., if the contents of the start, end and label type fields are
+    /// zero).
     ///
     /// In order to fully parse a GSE Header, due to the concept of "label
     /// re-use", it is necessary to know the label of a previous GSE Header in

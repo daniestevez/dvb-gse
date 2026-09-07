@@ -6,14 +6,14 @@
 [crates-badge]: https://img.shields.io/crates/v/dvb-gse.svg
 [crates-url]: https://crates.io/crates/dvb-gse
 
-dvg-gse is a Rust implementation of the DVB GSE (Generic Stream Encapsulation)
+dvb-gse is a Rust implementation of the DVB GSE (Generic Stream Encapsulation)
 protocol, GSE-HEM, and related protocols.
 
 It is mainly intended to be used as a CLI application that receives BBFRAMEs in
 UDP or TCP packets from a DVB-S2 receiver (such as
 [Longmynd](https://github.com/BritishAmateurTelevisionClub/longmynd) or
 commercial receivers supporting BBFRAME output), obtains IP packets from a
-continous-mode GSE stream or a GSE-HEM stream, and sends the IP packets to a TUN
+continuous-mode GSE stream or a GSE-HEM stream, and sends the IP packets to a TUN
 device.
 
 The crate can also be used as a library to process GSE Packets and
@@ -79,7 +79,7 @@ The CLI application tries to recover from dropped UDP packets.
 This corresponds to BBFRAMEs carried in a single UDP packet (it will typically
 be a jumbo packet). The following rules need to be followed.
 
-* The payload of each UDP packet can optionally be begin by a header of up to 64
+* The payload of each UDP packet can optionally begin with a header of up to 64
   bytes, which is discarded by this application. The header length is set with
   the `--header-length` argument. By default, no header is assumed.
 
@@ -104,14 +104,13 @@ as server. The following rules need to be followed.
   back in the TCP stream.
 
 * BBFRAMEs padding must be removed. The length of the BBFRAMEs in the stream
-  must equal 10 bytes for the BBHEADER plus the value of their DFL dividided by
-  8.
+  must equal 10 bytes for the BBHEADER plus the value of their DFL divided by 8.
 
 * No other data besides the headers and BBFRAMEs can be present in the TCP
   stream.
 
-If an error occurrs or the client closes the connection, the CLI application
-will continue to listen for new clients.
+If an error occurs or the client closes the connection, the CLI application will
+continue to listen for new clients.
 
 ## Label filtering
 
@@ -129,7 +128,7 @@ continuous GSE and GSE-HEM are supported).
 
 A test script that generates UDP packets containing GSE-HEM BBFRAMEs is included
 in
-[`utils/generate_test_gse_hem_bbframes.py`](util/generate_test_gse_hem_bbframes.py). This
+[`utils/generate_test_gse_hem_bbframes.py`](utils/generate_test_gse_hem_bbframes.py). This
 test script can be used by first running `dvb-gse` as indicated in the
 quickstart above (possibly by using `RUST_LOG=trace`), and then starting the
 `generate_test_gse_hem_bbframes.py` script. IPv6 UDP packets should be received
