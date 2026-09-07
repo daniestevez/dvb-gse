@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-07
+
+### Added
+
+- Option to allow some consecutive invalid BBHEADERs in stream mode (TCP input).
+- Added some clarifications to the documentation.
+- Option to set the maximum number of concurrent TCP clients in the CLI app.
+- Added Cargo.lock to git.
+
+### Fixed
+
+- Handling of GSE-HEM SYNCD = 0xffff (previously this SYNCD value would crash
+  the application).
+- Unbounded memory usage in defragmentation if an end packet is never received.
+- Panic if negative or non-finite statistics interval is requested.
+- Documentation typos.
+- Added missing fields to Defrag's Debug implementation.
+
+### Changed
+
+- Validate header length argument at the start of the CLI app (rather than when
+  a client connects, which is what was done in TCP input mode).
+- Stricter validation in Label::from_hex.
+
 ## [0.9.0] - 2026-06-18
 
 ### Added
@@ -18,7 +42,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Bug in reassembly of GSE packets that use label re-use in the start packet.
-
 - Renamed GSE packets in stats log message of CLI app to GSE PDUs for better clarity.
 
 ## [0.8.0] - 2026-04-20
