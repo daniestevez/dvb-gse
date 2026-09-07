@@ -190,6 +190,22 @@ impl BBFrameValidator {
             log::error!("DFL value {} too large", bbheader.dfl());
             return false;
         }
+        if bbheader.is_gse_hem() {
+            let syncd_bits = bbheader.syncd();
+            // SYNCD = 0xffff means "no GSE packet begins in this data field"
+            if syncd_bits != 0xffff {
+                if !syncd_bits.is_multiple_of(8) {
+                    log::error!(
+                        "GSE-HEM SYNCD is not 0xffff and not a multiple of 8: 0x{syncd_bits:04x}"
+                    );
+                    return false;
+                }
+                if syncd_bits >= bbheader.dfl() {
+                    log::error!("GSE-HEM SYNCD is not 0xffff and is greater than or equal to DFL");
+                    return false;
+                }
+            }
+        }
         true
     }
 
@@ -1012,7 +1028,7 @@ mod test {
         let valid_hem_header = hex!("b2 00 00 00 02 f0 00 00 00 87");
         assert!(validator.bbheader_is_valid(BBHeader::new(&valid_hem_header)));
 
-        let valid_hem_issy_header = hex!("ba 00 12 34 02 f0 56 02 11 7c");
+        let valid_hem_issy_header = hex!("ba 00 12 34 02 f0 56 02 10 a9");
         assert!(validator.bbheader_is_valid(BBHeader::new(&valid_hem_issy_header)));
 
         let wrong_crc = hex!("72 00 00 00 02 f0 00 00 00 14");
