@@ -10,7 +10,7 @@ use super::bbheader::BBHeader;
 use super::gseheader::{GSEHeader, Label, LabelType};
 use bytes::{Bytes, BytesMut};
 use crc::Digest;
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use thiserror::Error;
 
 /// GSE Packet.
@@ -454,6 +454,17 @@ impl Defragger {
             log::debug!("end of GSE fragment ID = {}", frag_id);
             return defrag.reconstruct(frag_id);
         }
+        // Check if the entry has to be removed because it has become too
+        // large. This prevents a defrag from growing unboundedly if it never
+        // sees end packets.
+        if let Entry::Occupied(entry) = self.defrags.entry(frag_id)
+            && entry.get().is_too_large()
+        {
+            log::warn!(
+                "removing reassembly entry for fragment ID {frag_id} because it is too large"
+            );
+            entry.remove_entry();
+        }
         None
     }
 }
@@ -505,7 +516,7 @@ impl Defrag {
             } else {
                 log::error!(
                     "data size of last GSE fragment is {} bytes, \
-			     which is less than the CRC-32 length",
+                     which is less than the CRC-32 length",
                     data.len()
                 );
             }
@@ -513,6 +524,20 @@ impl Defrag {
             self.digest.update(packet.data());
             self.current_length += packet.data().len();
         }
+    }
+
+    fn is_too_large(&self) -> bool {
+        // Check if we have collected data past the theoretical end of the
+        // packet to avoid the reassembly memory from growing unboundedly on bad
+        // data.
+        let max_len = if self.skip_total_length_check {
+            // The total length field is 16 bits, so the maximum length we can
+            // ever see is 64 KiB
+            1 << 16
+        } else {
+            self.total_length
+        };
+        self.current_length > max_len
     }
 
     fn reconstruct(self, frag_id: u8) -> Option<PDU> {
