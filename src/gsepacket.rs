@@ -585,7 +585,11 @@ impl std::fmt::Debug for Defrag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Defrag")
             .field("total_length", &self.total_length)
+            .field("protocol_type", &self.protocol_type)
+            .field("label", &self.label)
+            .field("current_length", &self.current_length)
             .field("fragments", &self.fragments)
+            .field("skip_total_length_check", &self.skip_total_length_check)
             .finish()
     }
 }
