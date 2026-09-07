@@ -59,21 +59,20 @@ impl GSEPacket {
         re_used_label: Option<&Label>,
         not_contained_is_error: bool,
     ) -> Option<GSEPacket> {
-        let header = GSEHeader::from_slice(bytes, re_used_label)?;
-        let header_len = header.len();
-        let total_len = 2 + usize::from(header.gse_length());
-        if total_len > bytes.len() {
-            if not_contained_is_error {
-                log::error!("GSE Packet not fully contained inside bytes");
+        match buffer_contents(bytes, re_used_label) {
+            BufferContents::IncompletePacket => {
+                if not_contained_is_error {
+                    log::error!("GSE Packet not fully contained inside bytes");
+                }
+                None
             }
-            return None;
+            BufferContents::CorruptPacket => None,
+            BufferContents::CompletePacket { header, total_len }
+            | BufferContents::PacketAndTrailer { header, total_len } => {
+                let data = bytes.slice(header.len()..total_len);
+                Some(GSEPacket { header, data })
+            }
         }
-        if total_len < header_len {
-            log::error!("GSE Packet total length is smaller than header length");
-            return None;
-        }
-        let data = bytes.slice(header_len..total_len);
-        Some(GSEPacket { header, data })
     }
 
     /// Splits a [`Bytes`] into GSE Packets.
@@ -225,23 +224,54 @@ impl PDU {
 }
 
 // This is needed because GSEPacketDefrag::defrag can return an iterator of
-// either one of two types, depending on whether the BBFRAME is GSE-HEM or not.
-enum EitherIter<AIterType, BIterType> {
+// either one of multiple types, depending on whether the BBFRAME is GSE-HEM or
+// not, and other conditions.
+enum EitherIter<AIterType, BIterType, CIterType> {
     A(AIterType),
     B(BIterType),
+    C(CIterType),
 }
 
-impl<AIterType, BIterType> Iterator for EitherIter<AIterType, BIterType>
+impl<AIterType, BIterType, CIterType> Iterator for EitherIter<AIterType, BIterType, CIterType>
 where
     AIterType: Iterator,
     BIterType: Iterator<Item = AIterType::Item>,
+    CIterType: Iterator<Item = AIterType::Item>,
 {
     type Item = AIterType::Item;
     fn next(&mut self) -> Option<<Self as Iterator>::Item> {
         match self {
             EitherIter::A(it) => it.next(),
             EitherIter::B(it) => it.next(),
+            EitherIter::C(it) => it.next(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+enum BufferContents {
+    CompletePacket { header: GSEHeader, total_len: usize },
+    IncompletePacket,
+    PacketAndTrailer { header: GSEHeader, total_len: usize },
+    CorruptPacket,
+}
+
+fn buffer_contents(buffer: &[u8], re_used_label: Option<&Label>) -> BufferContents {
+    use std::cmp::Ordering;
+
+    let Some(header) = GSEHeader::from_slice(buffer, re_used_label) else {
+        return BufferContents::CorruptPacket;
+    };
+    let total_len = 2 + usize::from(header.gse_length());
+    let header_len = header.len();
+    if total_len < header_len {
+        log::error!("GSE Packet total length is smaller than header length");
+        return BufferContents::CorruptPacket;
+    }
+    match total_len.cmp(&buffer.len()) {
+        Ordering::Less => BufferContents::PacketAndTrailer { header, total_len },
+        Ordering::Greater => BufferContents::IncompletePacket,
+        Ordering::Equal => BufferContents::CompletePacket { header, total_len },
     }
 }
 
@@ -285,15 +315,36 @@ impl GSEPacketDefrag {
         let bbheader = BBHeader::new(&bbheader);
         if bbheader.is_gse_hem() {
             let syncd_bits = bbheader.syncd();
-            if !syncd_bits.is_multiple_of(8) {
-                return Err(GSEError::SyncdNotMultiple);
-            }
-            let syncd_bytes = usize::from(syncd_bits / 8);
-            let remaining_start = BBHeader::LEN + syncd_bytes;
-            if remaining_start >= bbframe.len() {
-                return Err(GSEError::SyncdTooLarge);
-            }
-            let first_packet = match (self.hem_leftover.is_empty(), syncd_bytes == 0) {
+            let remaining_start = if syncd_bits == 0xffff {
+                // SYNCD = 0xffff means "no GSE packet begins in this data field"
+                if self.hem_leftover.is_empty() {
+                    log::warn!(
+                        "GSE-HEM SYNCD is 0xffff but we have no leftovers from previous BBFRAME"
+                    );
+                    return Ok(EitherIter::C(std::iter::empty()));
+                }
+                self.hem_leftover
+                    .extend_from_slice(&bbframe[BBHeader::LEN..]);
+                if matches!(
+                    buffer_contents(&self.hem_leftover, self.hem_last_label.as_ref()),
+                    BufferContents::IncompletePacket
+                ) {
+                    // Packet not finished yet. Return an empty iterator.
+                    return Ok(EitherIter::C(std::iter::empty()));
+                }
+                bbframe.len()
+            } else {
+                if !syncd_bits.is_multiple_of(8) {
+                    return Err(GSEError::SyncdNotMultiple);
+                }
+                let syncd_bytes = usize::from(syncd_bits / 8);
+                let remaining_start = BBHeader::LEN + syncd_bytes;
+                if remaining_start >= bbframe.len() {
+                    return Err(GSEError::SyncdTooLarge);
+                }
+                remaining_start
+            };
+            let first_packet = match (self.hem_leftover.is_empty(), syncd_bits == 0) {
                 (true, false) => {
                     log::warn!(
                         "GSE-HEM SYNCD is not zero but we have no leftovers from previous BBFRAME"
@@ -303,26 +354,36 @@ impl GSEPacketDefrag {
                 (false, true) => {
                     log::warn!(
                         "GSE-HEM SYNCD is zero but we have leftovers from previous BBFRAME; \
-                                 dropping leftovers"
+                         dropping leftovers"
                     );
-                    self.hem_leftover.truncate(0);
+                    self.hem_leftover.clear();
                     None
                 }
                 (true, true) => None,
                 (false, false) => {
-                    self.hem_leftover
-                        .extend_from_slice(&bbframe[BBHeader::LEN..remaining_start]);
-                    let concat = self.hem_leftover.split_off(0).freeze();
-                    let hem_last_label = self.hem_last_label.clone();
-                    GSEPacket::from_bytes(&concat, hem_last_label.as_ref()).and_then(|packet| {
-                        if packet.len() == concat.len() {
+                    if syncd_bits != 0xffff {
+                        // in the case SYNCD = 0xffff the extend has been
+                        // already done above
+                        self.hem_leftover
+                            .extend_from_slice(&bbframe[BBHeader::LEN..remaining_start]);
+                    }
+                    match buffer_contents(&self.hem_leftover, self.hem_last_label.as_ref()) {
+                        BufferContents::CompletePacket { .. } => {
+                            let packet = self.hem_leftover.split().freeze();
+                            let packet =
+                                GSEPacket::from_bytes(&packet, self.hem_last_label.as_ref())
+                                    .unwrap();
+                            if let Some(l) = packet.header.label() {
+                                self.hem_last_label = Some(l.clone());
+                            }
                             Some(packet)
-                        } else {
-                            log::warn!("GSE packet recovered from GSE-HEM leftovers does not match leftovers length; \
-                                        dropping packet");
+                        }
+                        _ => {
+                            log::warn!("GSE packet recovered from GSE-HEM leftovers is corrupted");
+                            self.hem_leftover.clear();
                             None
                         }
-                    })
+                    }
                 }
             };
             let remaining = bbframe.slice(remaining_start..);
@@ -358,9 +419,9 @@ impl GSEPacketDefrag {
             if !self.hem_leftover.is_empty() {
                 log::warn!(
                     "defragmenting non-HEM BBFRAME, but have leftovers from previous HEM BBFRAME; \
-                            dropping leftovers"
+                     dropping leftovers"
                 );
-                self.hem_leftover.truncate(0);
+                self.hem_leftover.clear();
             }
             Ok(EitherIter::B(
                 GSEPacket::split_bbframe(bbframe)?
