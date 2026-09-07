@@ -1,5 +1,9 @@
 use clap::Parser;
 use dvb_gse::metrics::Metrics;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering::Relaxed},
+};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -18,16 +22,19 @@ impl AsRef<dvb_gse::cli::Args> for Args {
 
 #[derive(Debug, Clone)]
 struct CustomMetrics {
-    bbframe_count: u64,
-    gse_count: u64,
+    // These are Arc's containing an atomic because the CustomMetrics object is
+    // cloned and shared among multiple threads (for instance TCP workers for
+    // each connection).
+    bbframe_count: Arc<AtomicU64>,
+    gse_count: Arc<AtomicU64>,
     custom_argument: String,
 }
 
 impl CustomMetrics {
     fn new(custom_argument: String) -> CustomMetrics {
         CustomMetrics {
-            bbframe_count: 0,
-            gse_count: 0,
+            bbframe_count: Arc::new(AtomicU64::new(0)),
+            gse_count: Arc::new(AtomicU64::new(0)),
             custom_argument,
         }
     }
@@ -35,11 +42,11 @@ impl CustomMetrics {
 
 impl Metrics for CustomMetrics {
     fn bbframe_received(&mut self, _bbframe: &bytes::Bytes) {
-        self.bbframe_count += 1;
+        let count = self.bbframe_count.fetch_add(1, Relaxed);
         log::info!(
             "[{}] BBFRAME received (total {})",
             self.custom_argument,
-            self.bbframe_count
+            count + 1
         );
     }
 
@@ -48,11 +55,11 @@ impl Metrics for CustomMetrics {
     }
 
     fn gse_pdu_received(&mut self, _pdu: &dvb_gse::gsepacket::PDU) {
-        self.gse_count += 1;
+        let count = self.gse_count.fetch_add(1, Relaxed);
         log::info!(
             "[{}] GSE PDU received (total {})",
             self.custom_argument,
-            self.gse_count
+            count + 1
         );
     }
 
